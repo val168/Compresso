@@ -1,6 +1,7 @@
 #include "compresso/main_window.h"
 #include "compresso/directory_validator.h"
 #include "compresso/directory_scanner.h"
+#include "compresso/compression_backend.h"
 
 #include <QDir>
 #include <QFile>
@@ -166,7 +167,7 @@ private slots:
         QTest::keyClick(pathField, Qt::Key_Return);
         QCOMPARE(pathField->text(), gameDirectory);
         QCOMPARE(status->currentMessage(),
-                 QStringLiteral("Directory is ready. Compression is not implemented."));
+                 QStringLiteral("Directory is ready. Analyze it before compression."));
 
         originalSize->setText("Previously analyzed");
         compressedSize->setText("Previously analyzed");
@@ -397,7 +398,137 @@ private slots:
                  QLocale().toString(static_cast<qulonglong>(scanned.total_allocated_bytes))
                      + " bytes");
         QVERIFY(window.findChild<QLabel*>("filesystemValue"));
-        QVERIFY(!compress->isEnabled());
+        const auto scan = compresso::DirectoryScanner::scan(
+            std::filesystem::path(temporaryDirectory.path().toStdWString()));
+        QCOMPARE(compress->isEnabled(), scan.volume.compression_eligible
+                                            && scan.total_file_count > 0);
+        if (compress->isEnabled()) {
+            QTest::mouseClick(compress, Qt::LeftButton);
+            QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().startsWith("LZX:"), 5000);
+            QVERIFY(!compress->isEnabled());
+        }
+    }
+
+    void compressionIntegrationUsesCompactAndPreservesFileContents()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+
+        const QString gameDirectory = QDir(temporaryDirectory.path()).filePath(
+            QString::fromUtf8("Game files \xE2\x98\x95"));
+        QVERIFY(QDir().mkpath(gameDirectory));
+        const QString filePath = QDir(gameDirectory).filePath("large asset with spaces.bin");
+        const QByteArray contents(1024 * 1024, '\0');
+        QFile file(filePath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(contents), static_cast<qint64>(contents.size()));
+        file.close();
+
+        const auto report = compresso::CompressionBackend::compressDirectory(
+            std::filesystem::path(gameDirectory.toStdWString()));
+        if (!report.target_eligible) {
+            QSKIP(qPrintable("Temporary directory is not on a supported local NTFS volume: "
+                             + report.rejection_reason));
+        }
+
+        QCOMPARE(report.files.size(), std::size_t{1});
+        QCOMPARE(report.compressedCount(), std::size_t{1});
+        QCOMPARE(report.failedCount(), std::size_t{0});
+        QCOMPARE(report.skippedCount(), std::size_t{0});
+        QCOMPARE(report.files.front().exit_code, 0);
+        QVERIFY(!report.files.front().standard_output.isEmpty()
+                || !report.files.front().standard_error.isEmpty());
+
+        QFile afterCompression(filePath);
+        QVERIFY(afterCompression.open(QIODevice::ReadOnly));
+        QCOMPARE(afterCompression.readAll(), contents);
+        afterCompression.close();
+        DWORD allocatedHigh = 0;
+        SetLastError(ERROR_SUCCESS);
+        const DWORD allocatedLow = GetCompressedFileSizeW(
+            std::filesystem::path(filePath.toStdWString()).c_str(), &allocatedHigh);
+        QVERIFY(allocatedLow != INVALID_FILE_SIZE || GetLastError() == NO_ERROR);
+        const std::uintmax_t allocatedBytes =
+            (static_cast<std::uintmax_t>(allocatedHigh) << 32) | allocatedLow;
+        QVERIFY(allocatedBytes < static_cast<std::uintmax_t>(contents.size()));
+    }
+
+    void compressionSkipsFilesOpenForWriting()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString gameDirectory = QDir(temporaryDirectory.path()).filePath("busy game");
+        QVERIFY(QDir().mkpath(gameDirectory));
+        const QString filePath = QDir(gameDirectory).filePath("active.bin");
+        QFile file(filePath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("active data"), qint64{11});
+        file.close();
+
+        HANDLE writer = CreateFileW(std::filesystem::path(filePath.toStdWString()).c_str(),
+                                    GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        QVERIFY(writer != INVALID_HANDLE_VALUE);
+
+        const auto report = compresso::CompressionBackend::compressDirectory(
+            std::filesystem::path(gameDirectory.toStdWString()));
+        CloseHandle(writer);
+        if (!report.target_eligible) {
+            QSKIP(qPrintable("Temporary directory is not on a supported local NTFS volume: "
+                             + report.rejection_reason));
+        }
+
+        QCOMPARE(report.compressedCount(), std::size_t{0});
+        QCOMPARE(report.skippedCount() + report.failedCount(), std::size_t{1});
+        QFile unchanged(filePath);
+        QVERIFY(unchanged.open(QIODevice::ReadOnly));
+        QCOMPARE(unchanged.readAll(), QByteArray("active data"));
+    }
+
+    void compressionRejectsVolumeRoots()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const auto tempPath = std::filesystem::path(temporaryDirectory.path().toStdWString());
+        std::wstring volumeRoot(32768, L'\0');
+        QVERIFY(GetVolumePathNameW(tempPath.c_str(), volumeRoot.data(),
+                                   static_cast<DWORD>(volumeRoot.size())));
+        volumeRoot.resize(std::char_traits<wchar_t>::length(volumeRoot.c_str()));
+
+        const auto report = compresso::CompressionBackend::compressDirectory(
+            std::filesystem::path(volumeRoot));
+        QVERIFY(!report.target_eligible);
+        QCOMPARE(report.rejection_reason, QStringLiteral("A volume root cannot be compressed."));
+        QVERIFY(report.files.empty());
+    }
+
+    void compressionRejectsItsOwnInstallationDirectory()
+    {
+        const auto applicationDirectory = std::filesystem::path(
+            QCoreApplication::applicationDirPath().toStdWString());
+        const auto report =
+            compresso::CompressionBackend::compressDirectory(applicationDirectory);
+        QVERIFY(!report.target_eligible);
+        QCOMPARE(report.rejection_reason,
+                 QStringLiteral("Compresso's installation directory is excluded."));
+        QVERIFY(report.files.empty());
+    }
+
+    void compressionRejectsWindowsDirectory()
+    {
+        std::wstring windowsDirectory(32768, L'\0');
+        const UINT length = GetWindowsDirectoryW(
+            windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
+        QVERIFY(length > 0);
+        QVERIFY(length < windowsDirectory.size());
+        windowsDirectory.resize(length);
+
+        const auto report = compresso::CompressionBackend::compressDirectory(
+            std::filesystem::path(windowsDirectory));
+        QVERIFY(!report.target_eligible);
+        QCOMPARE(report.rejection_reason,
+                 QStringLiteral("Windows and protected system locations are excluded."));
+        QVERIFY(report.files.empty());
     }
 };
 

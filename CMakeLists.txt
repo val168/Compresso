@@ -21,10 +21,12 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Concurrent)
 
 add_executable(Compresso WIN32
     src/main.cpp
+    src/compression_backend.cpp
     src/directory_validator.cpp
     src/directory_scanner.cpp
     src/main_window.cpp
     include/compresso/directory_validator.h
+    include/compresso/compression_backend.h
     include/compresso/directory_scanner.h
     include/compresso/main_window.h
 )
@@ -41,10 +43,12 @@ if(BUILD_TESTING)
 
     add_executable(CompressoUiTests
         tests/ui_tests.cpp
+        src/compression_backend.cpp
         src/directory_validator.cpp
         src/directory_scanner.cpp
         src/main_window.cpp
         include/compresso/directory_validator.h
+        include/compresso/compression_backend.h
         include/compresso/directory_scanner.h
         include/compresso/main_window.h
     )

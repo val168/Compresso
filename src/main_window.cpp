@@ -35,14 +35,14 @@ MainWindow::MainWindow(QWidget* parent)
     directoryPath_->setClearButtonEnabled(true);
     directoryLabel->setBuddy(directoryPath_);
 
-    auto* browseButton = new QPushButton("Browse…", content);
-    browseButton->setObjectName("browseButton");
-    connect(browseButton, &QPushButton::clicked, this, [this] { browseForDirectory(); });
+    browseButton_ = new QPushButton("Browse…", content);
+    browseButton_->setObjectName("browseButton");
+    connect(browseButton_, &QPushButton::clicked, this, [this] { browseForDirectory(); });
 
     auto* directoryRow = new QHBoxLayout;
     directoryRow->setSpacing(8);
     directoryRow->addWidget(directoryPath_, 1);
-    directoryRow->addWidget(browseButton);
+    directoryRow->addWidget(browseButton_);
 
     auto* separator = new QFrame(content);
     separator->setFrameShape(QFrame::HLine);
@@ -73,9 +73,9 @@ MainWindow::MainWindow(QWidget* parent)
     analyzeButton_ = new QPushButton("Analyze", content);
     analyzeButton_->setObjectName("analyzeButton");
     analyzeButton_->setEnabled(false);
-    auto* compressButton = new QPushButton("Compress", content);
-    compressButton->setObjectName("compressButton");
-    compressButton->setEnabled(false);
+    compressButton_ = new QPushButton("Compress", content);
+    compressButton_->setObjectName("compressButton");
+    compressButton_->setEnabled(false);
     auto* restoreButton = new QPushButton("Restore", content);
     restoreButton->setObjectName("restoreButton");
     restoreButton->setEnabled(false);
@@ -84,7 +84,7 @@ MainWindow::MainWindow(QWidget* parent)
     actions->setSpacing(8);
     actions->addStretch();
     actions->addWidget(analyzeButton_);
-    actions->addWidget(compressButton);
+    actions->addWidget(compressButton_);
     actions->addWidget(restoreButton);
 
     layout->addWidget(directoryLabel);
@@ -100,6 +100,7 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->showMessage("Select a game directory to get started.");
 
     scanWatcher_ = new QFutureWatcher<compresso::ScanResult>(this);
+    compressionWatcher_ = new QFutureWatcher<compresso::CompressionReport>(this);
 
     connect(directoryPath_, &QLineEdit::textChanged, this,
             [this] { handleDirectoryTextChanged(); });
@@ -109,6 +110,10 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { startDirectoryScan(); });
     connect(scanWatcher_, &QFutureWatcher<compresso::ScanResult>::finished, this,
             [this] { displayScanResult(); });
+    connect(compressButton_, &QPushButton::clicked, this,
+            [this] { startCompression(); });
+    connect(compressionWatcher_, &QFutureWatcher<compresso::CompressionReport>::finished, this,
+            [this] { displayCompressionResult(); });
 }
 
 void MainWindow::browseForDirectory()
@@ -131,6 +136,8 @@ void MainWindow::handleDirectoryTextChanged()
     compressedSizeValue_->setText("—");
     fileCountValue_->setText("—");
     filesystemValue_->setText("—");
+    analyzedDirectoryIsEligible_ = false;
+    compressButton_->setEnabled(false);
     analyzeButton_->setEnabled(false);
 
     if (directoryPath_->text().isEmpty()) {
@@ -151,7 +158,7 @@ void MainWindow::validateDirectoryPath()
     }
 
     validatedDirectory_ = path;
-    statusBar()->showMessage("Directory is ready. Compression is not implemented.");
+    statusBar()->showMessage("Directory is ready. Analyze it before compression.");
     analyzeButton_->setEnabled(!scanWatcher_->isRunning());
 }
 
@@ -227,4 +234,70 @@ void MainWindow::displayScanResult()
     message += ".";
     statusBar()->showMessage(message);
     analyzeButton_->setEnabled(true);
+    analyzedDirectoryIsEligible_ = result.volume.compression_eligible
+                                   && result.total_file_count > 0;
+    compressButton_->setEnabled(analyzedDirectoryIsEligible_);
+}
+
+void MainWindow::startCompression()
+{
+    if (!analyzedDirectoryIsEligible_ || !compressingDirectory_.isEmpty()
+        || validatedDirectory_.isEmpty() || validatedDirectory_ != directoryPath_->text()) {
+        return;
+    }
+
+    compressingDirectory_ = validatedDirectory_;
+    browseButton_->setEnabled(false);
+    directoryPath_->setEnabled(false);
+    analyzeButton_->setEnabled(false);
+    compressButton_->setEnabled(false);
+    statusBar()->showMessage("Applying transparent NTFS LZX compression…");
+
+    const std::filesystem::path root(compressingDirectory_.toStdWString());
+    compressionWatcher_->setFuture(QtConcurrent::run([root] {
+        return compresso::CompressionBackend::compressDirectory(root);
+    }));
+}
+
+void MainWindow::displayCompressionResult()
+{
+    const compresso::CompressionReport result = compressionWatcher_->result();
+    const QString targetDirectory = compressingDirectory_;
+    compressingDirectory_.clear();
+    browseButton_->setEnabled(true);
+    directoryPath_->setEnabled(true);
+
+    if (targetDirectory != directoryPath_->text() || targetDirectory != validatedDirectory_) {
+        analyzeButton_->setEnabled(!validatedDirectory_.isEmpty());
+        return;
+    }
+
+    if (!result.target_eligible) {
+        statusBar()->showMessage(result.rejection_reason.isEmpty()
+                                     ? "The selected directory is not eligible for LZX compression."
+                                     : result.rejection_reason);
+        analyzedDirectoryIsEligible_ = false;
+        analyzeButton_->setEnabled(true);
+        compressButton_->setEnabled(false);
+        return;
+    }
+
+    const QLocale locale;
+    compressedSizeValue_->setText("—");
+    analyzedDirectoryIsEligible_ = false;
+    analyzeButton_->setEnabled(true);
+    compressButton_->setEnabled(false);
+
+    QString message = "LZX: "
+        + locale.toString(static_cast<qulonglong>(result.compressedCount())) + " compressed";
+    if (result.skippedCount() > 0) {
+        message += ", "
+            + locale.toString(static_cast<qulonglong>(result.skippedCount())) + " skipped";
+    }
+    if (result.failedCount() > 0) {
+        message += ", "
+            + locale.toString(static_cast<qulonglong>(result.failedCount())) + " failed";
+    }
+    message += ". Analyze again to refresh allocated size.";
+    statusBar()->showMessage(message);
 }

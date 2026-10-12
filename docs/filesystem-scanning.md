@@ -8,4 +8,4 @@ On Windows, the scanner records read-only, hidden, system, archive, compressed, 
 
 Metadata and traversal failures are returned in `ScanResult` rather than thrown as filesystem exceptions. A failed directory traversal marks the result incomplete; inaccessible entries and files whose logical sizes cannot be read remain listed in `skipped_entries`.
 
-The scanner only inspects filesystem metadata. It does not read or change game contents, change attributes, move files, or create archives. These statistics prepare for a future native transparent NTFS LZX operation through Windows `compact.exe`.
+The scanner only inspects filesystem metadata. It does not read or change game contents, change attributes, move files, or create archives. These statistics prepare for native transparent NTFS LZX compression through Windows `compact.exe`; see [compression-backend.md](compression-backend.md) for its safety checks and per-file result handling.
