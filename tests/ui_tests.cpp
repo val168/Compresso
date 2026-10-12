@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QPushButton>
 #include <QStatusBar>
 #include <QTemporaryDir>
@@ -221,7 +222,20 @@ private slots:
         const compresso::ScanResult result = compresso::DirectoryScanner::scan(gameDirectory);
         QVERIFY(result.traversal_complete);
         QCOMPARE(result.total_file_count, std::size_t{2});
-        QCOMPARE(result.total_directory_size_bytes, std::uintmax_t{13});
+        QCOMPARE(result.total_logical_bytes, std::uintmax_t{13});
+        QVERIFY(result.allocation_measurements_complete);
+        QCOMPARE(result.allocation_measurement_failures.size(), std::size_t{0});
+        std::uintmax_t sumOfFileAllocations = 0;
+        for (const auto& file : result.files) {
+            QVERIFY(file.allocated_size_available);
+            sumOfFileAllocations += file.allocated_size_bytes;
+        }
+        QCOMPARE(result.total_allocated_bytes, sumOfFileAllocations);
+        QVERIFY(!result.volume.error);
+        QVERIFY(!result.volume.filesystem_type.empty());
+        QCOMPARE(result.volume.compression_eligible,
+                 result.volume.filesystem_type == L"NTFS"
+                     && result.volume.supports_file_compression);
         QVERIFY(result.skipped_entries.empty());
         QVERIFY(std::any_of(result.files.begin(), result.files.end(), [&](const auto& file) {
             return file.path == firstFile && file.logical_size_bytes == 5;
@@ -237,6 +251,21 @@ private slots:
         QVERIFY(attributedFile->attributes.read_only);
         QVERIFY(attributedFile->attributes.hidden);
         QVERIFY(SetFileAttributesW(firstFile.c_str(), FILE_ATTRIBUTE_NORMAL));
+    }
+
+    void scansEmptyDirectoryWithZeroSizes()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+
+        const auto root = std::filesystem::path(temporaryDirectory.path().toStdWString());
+        const compresso::ScanResult result = compresso::DirectoryScanner::scan(root);
+        QVERIFY(result.traversal_complete);
+        QVERIFY(result.allocation_measurements_complete);
+        QCOMPARE(result.total_file_count, std::size_t{0});
+        QCOMPARE(result.total_logical_bytes, std::uintmax_t{0});
+        QCOMPARE(result.total_allocated_bytes, std::uintmax_t{0});
+        QVERIFY(!result.volume.error);
     }
 
     void reportsRootFilesystemFailures()
@@ -300,7 +329,7 @@ private slots:
         const compresso::ScanResult result = compresso::DirectoryScanner::scan(gameDirectory);
         QVERIFY(result.traversal_complete);
         QCOMPARE(result.total_file_count, std::size_t{1});
-        QCOMPARE(result.total_directory_size_bytes, std::uintmax_t{6});
+        QCOMPARE(result.total_logical_bytes, std::uintmax_t{6});
         QVERIFY(!result.skipped_entries.empty());
         QVERIFY(std::any_of(result.skipped_entries.begin(), result.skipped_entries.end(),
                             [](const auto& entry) {
@@ -362,7 +391,12 @@ private slots:
 
         QCOMPARE(originalSize->text(), QStringLiteral("9 bytes"));
         QCOMPARE(fileCount->text(), QStringLiteral("1"));
-        QCOMPARE(compressedSize->text(), QStringLiteral("—"));
+        const auto scanned = compresso::DirectoryScanner::scan(
+            std::filesystem::path(temporaryDirectory.path().toStdWString()));
+        QCOMPARE(compressedSize->text(),
+                 QLocale().toString(static_cast<qulonglong>(scanned.total_allocated_bytes))
+                     + " bytes");
+        QVERIFY(window.findChild<QLabel*>("filesystemValue"));
         QVERIFY(!compress->isEnabled());
     }
 };

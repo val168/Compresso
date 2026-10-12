@@ -73,12 +73,69 @@ void skip(compresso::ScanResult& result, const std::filesystem::path& path,
     result.skipped_entries.push_back({path, reason, error});
 }
 
+compresso::VolumeInfo inspectVolume(const std::filesystem::path& root)
+{
+    compresso::VolumeInfo info;
+#ifdef _WIN32
+    std::wstring volumePath(32768, L'\0');
+    if (!GetVolumePathNameW(root.c_str(), volumePath.data(),
+                            static_cast<DWORD>(volumePath.size()))) {
+        info.error = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+        return info;
+    }
+
+    std::wstring filesystemName(128, L'\0');
+    DWORD volumeFlags = 0;
+    if (!GetVolumeInformationW(volumePath.c_str(), nullptr, 0, nullptr, nullptr,
+                               &volumeFlags, filesystemName.data(),
+                               static_cast<DWORD>(filesystemName.size()))) {
+        info.error = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+        return info;
+    }
+
+    filesystemName.resize(std::char_traits<wchar_t>::length(filesystemName.c_str()));
+    info.filesystem_type = std::move(filesystemName);
+    info.supports_file_compression = (volumeFlags & FILE_FILE_COMPRESSION) != 0;
+    info.compression_eligible = info.filesystem_type == L"NTFS"
+                                && info.supports_file_compression;
+#else
+    (void)root;
+    info.error = std::make_error_code(std::errc::operation_not_supported);
+#endif
+    return info;
+}
+
+bool getAllocatedSize(const std::filesystem::path& path, std::uintmax_t& size,
+                      std::error_code& error)
+{
+#ifdef _WIN32
+    DWORD high = 0;
+    SetLastError(ERROR_SUCCESS);
+    const DWORD low = GetCompressedFileSizeW(path.c_str(), &high);
+    if (low == INVALID_FILE_SIZE) {
+        const DWORD code = GetLastError();
+        if (code != NO_ERROR) {
+            error = std::error_code(static_cast<int>(code), std::system_category());
+            return false;
+        }
+    }
+    size = (static_cast<std::uintmax_t>(high) << 32) | low;
+    return true;
+#else
+    (void)path;
+    (void)size;
+    error = std::make_error_code(std::errc::operation_not_supported);
+    return false;
+#endif
+}
+
 } // namespace
 
 compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::path& root)
 {
     ScanResult result;
     result.root = root;
+    result.volume = inspectVolume(root);
 
     EntryMetadata rootMetadata;
     std::error_code rootError;
@@ -131,12 +188,37 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
                 if (sizeError) {
                     skip(result, entryPath, SkipReason::file_size_error, sizeError);
                 } else if (fileSize > std::numeric_limits<std::uintmax_t>::max()
-                                         - result.total_directory_size_bytes) {
+                                         - result.total_logical_bytes) {
                     skip(result, entryPath, SkipReason::file_size_error,
                          std::make_error_code(std::errc::value_too_large));
                 } else {
-                    result.files.push_back({entryPath, fileSize, metadata.attributes});
-                    result.total_directory_size_bytes += fileSize;
+                    ScannedFile scannedFile;
+                    scannedFile.path = entryPath;
+                    scannedFile.logical_size_bytes = fileSize;
+                    scannedFile.attributes = metadata.attributes;
+
+                    std::uintmax_t allocatedSize = 0;
+                    std::error_code allocationError;
+                    if (getAllocatedSize(entryPath, allocatedSize, allocationError)) {
+                        scannedFile.allocated_size_bytes = allocatedSize;
+                        scannedFile.allocated_size_available = true;
+                        if (allocatedSize > std::numeric_limits<std::uintmax_t>::max()
+                                                - result.total_allocated_bytes) {
+                            result.allocation_measurements_complete = false;
+                            result.allocation_measurement_failures.push_back(
+                                {entryPath,
+                                 std::make_error_code(std::errc::value_too_large)});
+                        } else {
+                            result.total_allocated_bytes += allocatedSize;
+                        }
+                    } else {
+                        result.allocation_measurements_complete = false;
+                        result.allocation_measurement_failures.push_back(
+                            {entryPath, allocationError});
+                    }
+
+                    result.files.push_back(std::move(scannedFile));
+                    result.total_logical_bytes += fileSize;
                 }
             }
 

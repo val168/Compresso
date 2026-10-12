@@ -26,6 +26,7 @@ private:
     QLabel* originalSizeValue_ = nullptr;
     QLabel* compressedSizeValue_ = nullptr;
     QLabel* fileCountValue_ = nullptr;
+    QLabel* filesystemValue_ = nullptr;
     QPushButton* analyzeButton_ = nullptr;
     QFutureWatcher<compresso::ScanResult>* scanWatcher_ = nullptr;
     QString validatedDirectory_;

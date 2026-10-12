@@ -63,10 +63,12 @@ MainWindow::MainWindow(QWidget* parent)
         return value;
     };
 
-    originalSizeValue_ = addDetail(0, "Original size", "—", "originalSizeValue");
-    compressedSizeValue_ = addDetail(1, "Compressed size", "—", "compressedSizeValue");
+    originalSizeValue_ = addDetail(0, "Original size (logical)", "—", "originalSizeValue");
+    compressedSizeValue_ = addDetail(1, "Allocated size (on disk)", "—",
+                                     "compressedSizeValue");
     addDetail(2, "Compression method", "LZX", "compressionMethodValue");
     fileCountValue_ = addDetail(3, "Files scanned", "—", "fileCountValue");
+    filesystemValue_ = addDetail(4, "Filesystem / LZX", "—", "filesystemValue");
 
     analyzeButton_ = new QPushButton("Analyze", content);
     analyzeButton_->setObjectName("analyzeButton");
@@ -128,6 +130,7 @@ void MainWindow::handleDirectoryTextChanged()
     originalSizeValue_->setText("—");
     compressedSizeValue_->setText("—");
     fileCountValue_->setText("—");
+    filesystemValue_->setText("—");
     analyzeButton_->setEnabled(false);
 
     if (directoryPath_->text().isEmpty()) {
@@ -189,8 +192,24 @@ void MainWindow::displayScanResult()
 
     const QLocale locale;
     originalSizeValue_->setText(
-        locale.toString(static_cast<qulonglong>(result.total_directory_size_bytes)) + " bytes");
+        locale.toString(static_cast<qulonglong>(result.total_logical_bytes)) + " bytes");
+    if (result.allocation_measurements_complete) {
+        compressedSizeValue_->setText(
+            locale.toString(static_cast<qulonglong>(result.total_allocated_bytes)) + " bytes");
+    } else {
+        compressedSizeValue_->setText("Unavailable");
+    }
     fileCountValue_->setText(locale.toString(static_cast<qulonglong>(result.total_file_count)));
+
+    if (result.volume.error) {
+        filesystemValue_->setText("Unavailable");
+    } else if (result.volume.compression_eligible) {
+        filesystemValue_->setText(QString::fromStdWString(result.volume.filesystem_type)
+                                  + " (LZX eligible)");
+    } else {
+        filesystemValue_->setText(QString::fromStdWString(result.volume.filesystem_type)
+                                  + " (LZX unavailable)");
+    }
 
     QString message = result.traversal_complete ? "Scan complete: " : "Scan incomplete: ";
     message += locale.toString(static_cast<qulonglong>(result.total_file_count)) + " files";
@@ -198,6 +217,12 @@ void MainWindow::displayScanResult()
         message += "; "
             + locale.toString(static_cast<qulonglong>(result.skipped_entries.size()))
             + " items skipped";
+    }
+    if (!result.allocation_measurements_complete) {
+        message += "; allocated size unavailable for "
+            + locale.toString(static_cast<qulonglong>(
+                  result.allocation_measurement_failures.size()))
+            + " files";
     }
     message += ".";
     statusBar()->showMessage(message);
