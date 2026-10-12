@@ -11,6 +11,7 @@
 #include <QPushButton>
 #include <QStatusBar>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 #include <filesystem>
@@ -269,6 +270,25 @@ private slots:
         QVERIFY(!result.volume.error);
     }
 
+    void scannerReportsTraversalProgress()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const auto root = std::filesystem::path(temporaryDirectory.path().toStdWString());
+        for (int index = 0; index < 260; ++index) {
+            std::ofstream file(root / (L"entry-" + std::to_wstring(index) + L".dat"),
+                               std::ios::binary);
+            QVERIFY(file.is_open());
+            file << "x";
+        }
+
+        std::size_t callbacks = 0;
+        const auto result = compresso::DirectoryScanner::scan(
+            root, [&callbacks](std::size_t, std::size_t) { ++callbacks; });
+        QCOMPARE(result.total_file_count, std::size_t{260});
+        QVERIFY(callbacks >= std::size_t{3});
+    }
+
     void reportsRootFilesystemFailures()
     {
         QTemporaryDir temporaryDirectory;
@@ -403,10 +423,102 @@ private slots:
         QCOMPARE(compress->isEnabled(), scan.volume.compression_eligible
                                             && scan.total_file_count > 0);
         if (compress->isEnabled()) {
+            auto* browse = window.findChild<QPushButton*>("browseButton");
+            QVERIFY(browse);
             QTest::mouseClick(compress, Qt::LeftButton);
+            QVERIFY(!pathField->isEnabled());
+            QVERIFY(!browse->isEnabled());
+            QVERIFY(!analyze->isEnabled());
+            QVERIFY(!compress->isEnabled());
             QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().startsWith("LZX:"), 5000);
             QVERIFY(!compress->isEnabled());
+            QTRY_VERIFY_WITH_TIMEOUT(analyze->isEnabled(), 5000);
         }
+    }
+
+    void asynchronousScanKeepsUiResponsiveAndLocksConflictingControls()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const auto root = std::filesystem::path(temporaryDirectory.path().toStdWString());
+        for (int index = 0; index < 700; ++index) {
+            std::ofstream file(root / (L"game-file-" + std::to_wstring(index) + L".bin"),
+                               std::ios::binary);
+            QVERIFY(file.is_open());
+            file << "game data";
+        }
+
+        MainWindow window;
+        auto* pathField = window.findChild<QLineEdit*>("gameDirectoryPath");
+        auto* analyze = window.findChild<QPushButton*>("analyzeButton");
+        auto* browse = window.findChild<QPushButton*>("browseButton");
+        auto* compress = window.findChild<QPushButton*>("compressButton");
+        auto* status = window.findChild<QStatusBar*>("operationStatus");
+        QVERIFY(pathField);
+        QVERIFY(analyze);
+        QVERIFY(browse);
+        QVERIFY(compress);
+        QVERIFY(status);
+
+        pathField->setText(temporaryDirectory.path());
+        pathField->setFocus();
+        QTest::keyClick(pathField, Qt::Key_Return);
+        QVERIFY(analyze->isEnabled());
+
+        int eventLoopTicks = 0;
+        QTimer timer;
+        timer.setInterval(1);
+        connect(&timer, &QTimer::timeout, this, [&eventLoopTicks] { ++eventLoopTicks; });
+        timer.start();
+        QTest::mouseClick(analyze, Qt::LeftButton);
+        QVERIFY(!pathField->isEnabled());
+        QVERIFY(!browse->isEnabled());
+        QVERIFY(!analyze->isEnabled());
+        QVERIFY(!compress->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().startsWith("Scan complete:"), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(analyze->isEnabled(), 5000);
+        timer.stop();
+
+        QVERIFY(eventLoopTicks > 0);
+        QCOMPARE(pathField->isEnabled(), true);
+        QCOMPARE(browse->isEnabled(), true);
+        QCOMPARE(analyze->isEnabled(), true);
+        const auto scan = compresso::DirectoryScanner::scan(root);
+        QCOMPARE(compress->isEnabled(), scan.volume.compression_eligible
+                                            && scan.total_file_count > 0);
+    }
+
+    void closingDuringAnOperationWaitsForWorkerCleanup()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const auto root = std::filesystem::path(temporaryDirectory.path().toStdWString());
+        for (int index = 0; index < 2000; ++index) {
+            std::ofstream file(root / (L"shutdown-file-" + std::to_wstring(index) + L".bin"),
+                               std::ios::binary);
+            QVERIFY(file.is_open());
+            file << "data";
+        }
+
+        MainWindow window;
+        window.show();
+        auto* pathField = window.findChild<QLineEdit*>("gameDirectoryPath");
+        auto* analyze = window.findChild<QPushButton*>("analyzeButton");
+        auto* status = window.findChild<QStatusBar*>("operationStatus");
+        QVERIFY(pathField);
+        QVERIFY(analyze);
+        QVERIFY(status);
+        pathField->setText(temporaryDirectory.path());
+        pathField->setFocus();
+        QTest::keyClick(pathField, Qt::Key_Return);
+        QTest::mouseClick(analyze, Qt::LeftButton);
+        QVERIFY(!pathField->isEnabled());
+
+        window.close();
+        QVERIFY(window.isVisible());
+        QCOMPARE(status->currentMessage(),
+                 QStringLiteral("Finishing the current operation before closing\u2026"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.isVisible(), 10000);
     }
 
     void compressionIntegrationUsesCompactAndPreservesFileContents()

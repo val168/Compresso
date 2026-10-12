@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -78,7 +79,11 @@ struct ScanResult
 class DirectoryScanner final
 {
 public:
-    [[nodiscard]] static ScanResult scan(const std::filesystem::path& root);
+    using ProgressCallback =
+        std::function<void(std::size_t entries_visited, std::size_t files_found)>;
+
+    [[nodiscard]] static ScanResult scan(const std::filesystem::path& root,
+                                         ProgressCallback progress = {});
 };
 
 } // namespace compresso

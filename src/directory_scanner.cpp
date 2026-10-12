@@ -131,11 +131,18 @@ bool getAllocatedSize(const std::filesystem::path& path, std::uintmax_t& size,
 
 } // namespace
 
-compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::path& root)
+compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::path& root,
+                                                         ProgressCallback progress)
 {
     ScanResult result;
     result.root = root;
     result.volume = inspectVolume(root);
+    std::size_t entriesVisited = 0;
+    const auto reportProgress = [&] {
+        if (progress) {
+            progress(entriesVisited, result.files.size());
+        }
+    };
 
     EntryMetadata rootMetadata;
     std::error_code rootError;
@@ -170,6 +177,7 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
         }
 
         while (iterator != end) {
+            ++entriesVisited;
             const std::filesystem::path entryPath = iterator->path();
             EntryMetadata metadata;
             std::error_code metadataError;
@@ -229,9 +237,13 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
                 skip(result, directory, SkipReason::traversal_error, incrementError);
                 break;
             }
+            if ((entriesVisited & 0x7fU) == 0U) {
+                reportProgress();
+            }
         }
     }
 
     result.total_file_count = result.files.size();
+    reportProgress();
     return result;
 }

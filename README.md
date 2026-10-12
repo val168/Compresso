@@ -10,7 +10,7 @@ The Qt Widgets interface supports selecting a game directory with the Windows fo
 - CMake 3.25 or later
 - Ninja
 - GCC/MinGW-w64 with C++23 support
-- Qt 6 Widgets and Concurrent built for the same MinGW toolchain
+- Qt 6 Widgets built for the same MinGW toolchain
 
 If Qt is not in a standard CMake search location, set `CMAKE_PREFIX_PATH` to its installation prefix (the directory containing `lib/cmake/Qt6`). For example, in PowerShell: `$env:CMAKE_PREFIX_PATH = 'C:/Qt/6.x.x/mingw_64'`.
 
@@ -45,7 +45,7 @@ Run `out/build/debug/Compresso.exe`. Ensure the Qt 6 and MinGW runtime `bin` dir
 
 Compression is per file and reports successes, failures, and skipped entries. It excludes volume roots, protected Windows locations, and Compresso's own installation directory. LZX is optimized for read-heavy files; test a specific game before using it. See the [compression design note](docs/compression.md) and [backend details](docs/compression-backend.md).
 
-See [the filesystem scanning note](docs/filesystem-scanning.md) for the scanner API and its handling of inaccessible entries and reparse points.
+Scanning and LZX compression run on an owned Qt worker thread. Progress and results are delivered to the window through queued signals, and closing the window waits for an active operation to finish. See [the filesystem scanning note](docs/filesystem-scanning.md) for scanner behavior and [the operation worker note](docs/async-operations.md) for the worker lifecycle.
 
 ## License
 

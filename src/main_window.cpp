@@ -1,7 +1,9 @@
 #include "compresso/main_window.h"
-#include "compresso/directory_validator.h"
 
-#include <QFutureWatcher>
+#include "compresso/directory_validator.h"
+#include "compresso/operation_worker.h"
+
+#include <QCloseEvent>
 #include <QFileDialog>
 #include <QFrame>
 #include <QGridLayout>
@@ -11,13 +13,16 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QThread>
 #include <QVBoxLayout>
 #include <QWidget>
-#include <QtConcurrent/QtConcurrentRun>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
+    qRegisterMetaType<compresso::ScanResult>("compresso::ScanResult");
+    qRegisterMetaType<compresso::CompressionReport>("compresso::CompressionReport");
+
     setWindowTitle("Compresso");
     setMinimumWidth(420);
     resize(520, 270);
@@ -35,7 +40,7 @@ MainWindow::MainWindow(QWidget* parent)
     directoryPath_->setClearButtonEnabled(true);
     directoryLabel->setBuddy(directoryPath_);
 
-    browseButton_ = new QPushButton("Browse…", content);
+    browseButton_ = new QPushButton("Browse\u2026", content);
     browseButton_->setObjectName("browseButton");
     connect(browseButton_, &QPushButton::clicked, this, [this] { browseForDirectory(); });
 
@@ -53,8 +58,8 @@ MainWindow::MainWindow(QWidget* parent)
     details->setVerticalSpacing(8);
 
     const auto addDetail = [content, details](int row, const QString& labelText,
-                                               const QString& valueText,
-                                               const char* valueObjectName) {
+                                              const QString& valueText,
+                                              const char* valueObjectName) {
         auto* label = new QLabel(labelText, content);
         auto* value = new QLabel(valueText, content);
         value->setObjectName(QString::fromLatin1(valueObjectName));
@@ -63,12 +68,12 @@ MainWindow::MainWindow(QWidget* parent)
         return value;
     };
 
-    originalSizeValue_ = addDetail(0, "Original size (logical)", "—", "originalSizeValue");
-    compressedSizeValue_ = addDetail(1, "Allocated size (on disk)", "—",
+    originalSizeValue_ = addDetail(0, "Original size (logical)", "\u2014", "originalSizeValue");
+    compressedSizeValue_ = addDetail(1, "Allocated size (on disk)", "\u2014",
                                      "compressedSizeValue");
     addDetail(2, "Compression method", "LZX", "compressionMethodValue");
-    fileCountValue_ = addDetail(3, "Files scanned", "—", "fileCountValue");
-    filesystemValue_ = addDetail(4, "Filesystem / LZX", "—", "filesystemValue");
+    fileCountValue_ = addDetail(3, "Files scanned", "\u2014", "fileCountValue");
+    filesystemValue_ = addDetail(4, "Filesystem / LZX", "\u2014", "filesystemValue");
 
     analyzeButton_ = new QPushButton("Analyze", content);
     analyzeButton_->setObjectName("analyzeButton");
@@ -93,14 +98,10 @@ MainWindow::MainWindow(QWidget* parent)
     layout->addLayout(details);
     layout->addStretch(1);
     layout->addLayout(actions);
-
     setCentralWidget(content);
 
     statusBar()->setObjectName("operationStatus");
     statusBar()->showMessage("Select a game directory to get started.");
-
-    scanWatcher_ = new QFutureWatcher<compresso::ScanResult>(this);
-    compressionWatcher_ = new QFutureWatcher<compresso::CompressionReport>(this);
 
     connect(directoryPath_, &QLineEdit::textChanged, this,
             [this] { handleDirectoryTextChanged(); });
@@ -108,12 +109,87 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { validateDirectoryPath(); });
     connect(analyzeButton_, &QPushButton::clicked, this,
             [this] { startDirectoryScan(); });
-    connect(scanWatcher_, &QFutureWatcher<compresso::ScanResult>::finished, this,
-            [this] { displayScanResult(); });
     connect(compressButton_, &QPushButton::clicked, this,
             [this] { startCompression(); });
-    connect(compressionWatcher_, &QFutureWatcher<compresso::CompressionReport>::finished, this,
-            [this] { displayCompressionResult(); });
+}
+
+MainWindow::~MainWindow()
+{
+    // This also covers application shutdown paths that bypass closeEvent (for example,
+    // QApplication::quit()). A running worker is allowed to finish before its QThread dies.
+    if (operationThread_ && operationThread_->isRunning()) {
+        operationThread_->quit();
+        operationThread_->wait();
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    if (operationThread_ && operationThread_->isRunning()) {
+        closeAfterOperation_ = true;
+        statusBar()->showMessage("Finishing the current operation before closing…");
+        event->ignore();
+        return;
+    }
+    event->accept();
+}
+
+void MainWindow::startOperation(bool compressing, const QString& directory)
+{
+    if (operationThread_ && operationThread_->isRunning()) {
+        return;
+    }
+
+    setOperationControlsEnabled(false);
+
+    auto* thread = new QThread(this);
+    auto* worker = new compresso::OperationWorker(
+        compressing ? compresso::OperationWorker::Kind::compress
+                    : compresso::OperationWorker::Kind::scan,
+        std::filesystem::path(directory.toStdWString()));
+    worker->moveToThread(thread);
+
+    connect(thread, &QThread::started, worker, &compresso::OperationWorker::run);
+    connect(worker, &compresso::OperationWorker::progressChanged, this,
+            [this](const QString& message) { statusBar()->showMessage(message); });
+    connect(worker, &compresso::OperationWorker::errorOccurred, this,
+            [this](const QString& message) {
+                analyzedDirectoryIsEligible_ = false;
+                compressButton_->setEnabled(false);
+                statusBar()->showMessage(message);
+            });
+    connect(worker, &compresso::OperationWorker::scanCompleted, this,
+            [this, directory](const compresso::ScanResult& result) {
+                displayScanResult(result, directory);
+            });
+    connect(worker, &compresso::OperationWorker::compressionCompleted, this,
+            [this, directory](const compresso::CompressionReport& result) {
+                displayCompressionResult(result, directory);
+            });
+    connect(worker, &compresso::OperationWorker::finished, thread, &QThread::quit);
+    connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+    connect(thread, &QThread::finished, this, [this, thread] {
+        if (operationThread_ == thread) {
+            operationThread_ = nullptr;
+        }
+        thread->deleteLater();
+        setOperationControlsEnabled(true);
+        if (closeAfterOperation_) {
+            closeAfterOperation_ = false;
+            QMetaObject::invokeMethod(this, &QWidget::close, Qt::QueuedConnection);
+        }
+    });
+
+    operationThread_ = thread;
+    thread->start();
+}
+
+void MainWindow::setOperationControlsEnabled(bool enabled)
+{
+    browseButton_->setEnabled(enabled);
+    directoryPath_->setEnabled(enabled);
+    analyzeButton_->setEnabled(enabled && !validatedDirectory_.isEmpty());
+    compressButton_->setEnabled(enabled && analyzedDirectoryIsEligible_);
 }
 
 void MainWindow::browseForDirectory()
@@ -132,10 +208,10 @@ void MainWindow::browseForDirectory()
 void MainWindow::handleDirectoryTextChanged()
 {
     validatedDirectory_.clear();
-    originalSizeValue_->setText("—");
-    compressedSizeValue_->setText("—");
-    fileCountValue_->setText("—");
-    filesystemValue_->setText("—");
+    originalSizeValue_->setText("\u2014");
+    compressedSizeValue_->setText("\u2014");
+    fileCountValue_->setText("\u2014");
+    filesystemValue_->setText("\u2014");
     analyzedDirectoryIsEligible_ = false;
     compressButton_->setEnabled(false);
     analyzeButton_->setEnabled(false);
@@ -149,6 +225,9 @@ void MainWindow::handleDirectoryTextChanged()
 
 void MainWindow::validateDirectoryPath()
 {
+    if (operationThread_ && operationThread_->isRunning()) {
+        return;
+    }
     const QString path = directoryPath_->text();
     const QString error = compresso::directoryValidationError(path);
     if (!error.isEmpty()) {
@@ -159,12 +238,12 @@ void MainWindow::validateDirectoryPath()
 
     validatedDirectory_ = path;
     statusBar()->showMessage("Directory is ready. Analyze it before compression.");
-    analyzeButton_->setEnabled(!scanWatcher_->isRunning());
+    analyzeButton_->setEnabled(true);
 }
 
 void MainWindow::startDirectoryScan()
 {
-    if (scanWatcher_->isRunning()) {
+    if (operationThread_ && operationThread_->isRunning()) {
         return;
     }
     if (validatedDirectory_.isEmpty() || validatedDirectory_ != directoryPath_->text()) {
@@ -174,38 +253,24 @@ void MainWindow::startDirectoryScan()
         analyzeButton_->setEnabled(false);
         return;
     }
-
-    scanningDirectory_ = validatedDirectory_;
-    analyzeButton_->setEnabled(false);
-    statusBar()->showMessage("Scanning directory…");
-
-    const std::filesystem::path root(scanningDirectory_.toStdWString());
-    scanWatcher_->setFuture(QtConcurrent::run([root] {
-        return compresso::DirectoryScanner::scan(root);
-    }));
+    analyzedDirectoryIsEligible_ = false;
+    compressButton_->setEnabled(false);
+    startOperation(false, validatedDirectory_);
 }
 
-void MainWindow::displayScanResult()
+void MainWindow::displayScanResult(const compresso::ScanResult& result,
+                                   const QString& directory)
 {
-    const compresso::ScanResult result = scanWatcher_->result();
-    const QString scannedDirectory = scanningDirectory_;
-    scanningDirectory_.clear();
-
-    if (scannedDirectory != directoryPath_->text()
-        || scannedDirectory != validatedDirectory_) {
-        analyzeButton_->setEnabled(!validatedDirectory_.isEmpty());
+    if (directory != directoryPath_->text() || directory != validatedDirectory_) {
         return;
     }
 
     const QLocale locale;
     originalSizeValue_->setText(
         locale.toString(static_cast<qulonglong>(result.total_logical_bytes)) + " bytes");
-    if (result.allocation_measurements_complete) {
-        compressedSizeValue_->setText(
-            locale.toString(static_cast<qulonglong>(result.total_allocated_bytes)) + " bytes");
-    } else {
-        compressedSizeValue_->setText("Unavailable");
-    }
+    compressedSizeValue_->setText(result.allocation_measurements_complete
+        ? locale.toString(static_cast<qulonglong>(result.total_allocated_bytes)) + " bytes"
+        : "Unavailable");
     fileCountValue_->setText(locale.toString(static_cast<qulonglong>(result.total_file_count)));
 
     if (result.volume.error) {
@@ -221,82 +286,60 @@ void MainWindow::displayScanResult()
     QString message = result.traversal_complete ? "Scan complete: " : "Scan incomplete: ";
     message += locale.toString(static_cast<qulonglong>(result.total_file_count)) + " files";
     if (!result.skipped_entries.empty()) {
-        message += "; "
-            + locale.toString(static_cast<qulonglong>(result.skipped_entries.size()))
-            + " items skipped";
+        message += "; " + locale.toString(
+            static_cast<qulonglong>(result.skipped_entries.size())) + " items skipped";
     }
     if (!result.allocation_measurements_complete) {
-        message += "; allocated size unavailable for "
-            + locale.toString(static_cast<qulonglong>(
-                  result.allocation_measurement_failures.size()))
-            + " files";
+        message += "; allocated size unavailable for " + locale.toString(
+            static_cast<qulonglong>(result.allocation_measurement_failures.size())) + " files";
     }
     message += ".";
     statusBar()->showMessage(message);
-    analyzeButton_->setEnabled(true);
     analyzedDirectoryIsEligible_ = result.volume.compression_eligible
                                    && result.total_file_count > 0;
-    compressButton_->setEnabled(analyzedDirectoryIsEligible_);
 }
 
 void MainWindow::startCompression()
 {
-    if (!analyzedDirectoryIsEligible_ || !compressingDirectory_.isEmpty()
-        || validatedDirectory_.isEmpty() || validatedDirectory_ != directoryPath_->text()) {
+    if (operationThread_ && operationThread_->isRunning()) {
         return;
     }
-
-    compressingDirectory_ = validatedDirectory_;
-    browseButton_->setEnabled(false);
-    directoryPath_->setEnabled(false);
-    analyzeButton_->setEnabled(false);
-    compressButton_->setEnabled(false);
-    statusBar()->showMessage("Applying transparent NTFS LZX compression…");
-
-    const std::filesystem::path root(compressingDirectory_.toStdWString());
-    compressionWatcher_->setFuture(QtConcurrent::run([root] {
-        return compresso::CompressionBackend::compressDirectory(root);
-    }));
+    if (!analyzedDirectoryIsEligible_ || validatedDirectory_.isEmpty()
+        || validatedDirectory_ != directoryPath_->text()) {
+        return;
+    }
+    analyzedDirectoryIsEligible_ = false;
+    startOperation(true, validatedDirectory_);
 }
 
-void MainWindow::displayCompressionResult()
+void MainWindow::displayCompressionResult(const compresso::CompressionReport& result,
+                                          const QString& directory)
 {
-    const compresso::CompressionReport result = compressionWatcher_->result();
-    const QString targetDirectory = compressingDirectory_;
-    compressingDirectory_.clear();
-    browseButton_->setEnabled(true);
-    directoryPath_->setEnabled(true);
-
-    if (targetDirectory != directoryPath_->text() || targetDirectory != validatedDirectory_) {
-        analyzeButton_->setEnabled(!validatedDirectory_.isEmpty());
+    if (directory != directoryPath_->text() || directory != validatedDirectory_) {
         return;
     }
 
     if (!result.target_eligible) {
         statusBar()->showMessage(result.rejection_reason.isEmpty()
-                                     ? "The selected directory is not eligible for LZX compression."
-                                     : result.rejection_reason);
+            ? "The selected directory is not eligible for LZX compression."
+            : result.rejection_reason);
         analyzedDirectoryIsEligible_ = false;
-        analyzeButton_->setEnabled(true);
-        compressButton_->setEnabled(false);
         return;
     }
 
     const QLocale locale;
-    compressedSizeValue_->setText("—");
+    compressedSizeValue_->setText("\u2014");
     analyzedDirectoryIsEligible_ = false;
-    analyzeButton_->setEnabled(true);
-    compressButton_->setEnabled(false);
 
     QString message = "LZX: "
         + locale.toString(static_cast<qulonglong>(result.compressedCount())) + " compressed";
     if (result.skippedCount() > 0) {
-        message += ", "
-            + locale.toString(static_cast<qulonglong>(result.skippedCount())) + " skipped";
+        message += ", " + locale.toString(static_cast<qulonglong>(result.skippedCount()))
+                   + " skipped";
     }
     if (result.failedCount() > 0) {
-        message += ", "
-            + locale.toString(static_cast<qulonglong>(result.failedCount())) + " failed";
+        message += ", " + locale.toString(static_cast<qulonglong>(result.failedCount()))
+                   + " failed";
     }
     message += ". Analyze again to refresh allocated size.";
     statusBar()->showMessage(message);

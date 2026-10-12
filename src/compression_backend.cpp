@@ -218,7 +218,7 @@ std::size_t compresso::CompressionReport::failedCount() const noexcept
 }
 
 compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
-    const std::filesystem::path& directory)
+    const std::filesystem::path& directory, ProgressCallback progress)
 {
     CompressionReport report;
     report.target_directory = directory;
@@ -316,57 +316,71 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
     }
 
     report.target_eligible = true;
-    const ScanResult scan = DirectoryScanner::scan(canonicalDirectory);
+    const ScanResult scan = DirectoryScanner::scan(
+        canonicalDirectory, [&progress](std::size_t visited, std::size_t) {
+            if (progress) {
+                progress(visited, 0);
+            }
+        });
+    const std::size_t totalEntries = scan.skipped_entries.size() + scan.files.size();
+    std::size_t completedEntries = 0;
+    const auto appendResult = [&](CompressionFileResult result) {
+        report.files.push_back(std::move(result));
+        ++completedEntries;
+        if (progress) {
+            progress(completedEntries, totalEntries);
+        }
+    };
     for (const auto& entry : scan.skipped_entries) {
         const CompressionSkipReason reason = entry.reason == SkipReason::reparse_point
             ? CompressionSkipReason::reparse_point
             : entry.reason == SkipReason::unsupported_file_type
                 ? CompressionSkipReason::unsupported_entry
                 : CompressionSkipReason::inaccessible;
-        report.files.push_back(skipped(entry.path, reason, skipReasonMessage(entry.reason)));
+        appendResult(skipped(entry.path, reason, skipReasonMessage(entry.reason)));
     }
 
     for (const auto& scannedFile : scan.files) {
         const std::filesystem::path filePath = scannedFile.path;
         const DWORD attributes = GetFileAttributesW(filePath.c_str());
         if (attributes == INVALID_FILE_ATTRIBUTES) {
-            report.files.push_back(skipped(filePath, CompressionSkipReason::inaccessible,
-                                           "File attributes are unavailable."));
+            appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
+                                 "File attributes are unavailable."));
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-            report.files.push_back(skipped(filePath, CompressionSkipReason::reparse_point,
-                                           "Symbolic links and junctions are not compressed."));
+            appendResult(skipped(filePath, CompressionSkipReason::reparse_point,
+                                 "Symbolic links and junctions are not compressed."));
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_ENCRYPTED) != 0) {
-            report.files.push_back(skipped(filePath, CompressionSkipReason::encrypted,
-                                           "Encrypted files are not compressed."));
+            appendResult(skipped(filePath, CompressionSkipReason::encrypted,
+                                 "Encrypted files are not compressed."));
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0) {
-            report.files.push_back(skipped(filePath, CompressionSkipReason::sparse,
-                                           "Sparse files are not compressed."));
+            appendResult(skipped(filePath, CompressionSkipReason::sparse,
+                                 "Sparse files are not compressed."));
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_COMPRESSED) != 0
             || (scannedFile.allocated_size_available
                 && scannedFile.allocated_size_bytes < scannedFile.logical_size_bytes)) {
-            report.files.push_back(skipped(filePath, CompressionSkipReason::already_compressed,
-                                           "The file is already compressed or its allocation "
-                                           "is below its logical size."));
+            appendResult(skipped(filePath, CompressionSkipReason::already_compressed,
+                                 "The file is already compressed or its allocation "
+                                 "is below its logical size."));
             continue;
         }
 
         FileStamp before;
         if (!readFileStamp(filePath, before)) {
-            report.files.push_back(skipped(filePath, CompressionSkipReason::active_or_busy,
-                                           "The file is inaccessible, write-protected, or open for writing."));
+            appendResult(skipped(filePath, CompressionSkipReason::active_or_busy,
+                                 "The file is inaccessible, write-protected, or open for writing."));
             continue;
         }
         if (!scannedFile.allocated_size_available) {
-            report.files.push_back(skipped(filePath, CompressionSkipReason::inaccessible,
-                                           "The current disk allocation could not be measured."));
+            appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
+                                 "The current disk allocation could not be measured."));
             continue;
         }
 
@@ -376,8 +390,7 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
                               QStringLiteral("/Q"), QString::fromStdWString(filePath.native())});
         process.start();
         if (!process.waitForStarted()) {
-            report.files.push_back(failed(
-                filePath, "compact.exe could not start: " + process.errorString()));
+            appendResult(failed(filePath, "compact.exe could not start: " + process.errorString()));
             continue;
         }
         if (!process.waitForFinished(-1)) {
@@ -387,7 +400,7 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
             result.exit_code = process.exitCode();
             result.standard_output = process.readAllStandardOutput();
             result.standard_error = process.readAllStandardError();
-            report.files.push_back(std::move(result));
+            appendResult(std::move(result));
             continue;
         }
 
@@ -402,13 +415,13 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
             fileResult.state = CompressionFileState::failed;
             fileResult.error_message = "compact.exe terminated unexpectedly: "
                                        + process.errorString();
-            report.files.push_back(std::move(fileResult));
+            appendResult(std::move(fileResult));
             continue;
         }
         if (fileResult.exit_code != 0) {
             fileResult.state = CompressionFileState::failed;
             fileResult.error_message = "compact.exe reported that compression failed.";
-            report.files.push_back(std::move(fileResult));
+            appendResult(std::move(fileResult));
             continue;
         }
 
@@ -416,7 +429,7 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
         if (!readFileStamp(filePath, after) || !sameFileStamp(before, after)) {
             fileResult.state = CompressionFileState::failed;
             fileResult.error_message = "The file changed or became busy during compression.";
-            report.files.push_back(std::move(fileResult));
+            appendResult(std::move(fileResult));
             continue;
         }
 
@@ -438,7 +451,7 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
             fileResult.state = CompressionFileState::failed;
             fileResult.error_message = "The filesystem did not provide a final allocation measurement.";
         }
-        report.files.push_back(std::move(fileResult));
+        appendResult(std::move(fileResult));
     }
 
     return report;

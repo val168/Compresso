@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -56,8 +57,10 @@ struct CompressionReport
 class CompressionBackend final
 {
 public:
+    using ProgressCallback = std::function<void(std::size_t completed, std::size_t total)>;
+
     [[nodiscard]] static CompressionReport compressDirectory(
-        const std::filesystem::path& directory);
+        const std::filesystem::path& directory, ProgressCallback progress = {});
 };
 
 } // namespace compresso
