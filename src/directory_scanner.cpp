@@ -211,6 +211,7 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
             EntryMetadata metadata;
             std::error_code metadataError;
             if (!readMetadata(entryPath, metadata, metadataError)) {
+                result.traversal_complete = false;
                 skip(result, entryPath, SkipReason::inaccessible_entry, metadataError);
             } else if (metadata.is_reparse_point) {
                 // Windows junctions, mount points, and symbolic links are all reparse points.
@@ -223,9 +224,11 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
                 std::error_code sizeError;
                 const std::uintmax_t fileSize = std::filesystem::file_size(entryPath, sizeError);
                 if (sizeError) {
+                    result.traversal_complete = false;
                     skip(result, entryPath, SkipReason::file_size_error, sizeError);
                 } else if (fileSize > std::numeric_limits<std::uintmax_t>::max()
                                          - result.total_logical_bytes) {
+                    result.traversal_complete = false;
                     skip(result, entryPath, SkipReason::file_size_error,
                          std::make_error_code(std::errc::value_too_large));
                 } else {

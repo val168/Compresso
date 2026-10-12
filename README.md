@@ -6,6 +6,8 @@ The Qt Widgets interface supports selecting a game directory with the Windows fo
 
 Background compression and restoration report completed files, logical bytes accounted for, elapsed time, and the current filename. Their standard progress bar remains indeterminate until the target file count is known, then reflects completed file outcomes.
 
+After compression, Compresso compares allocated bytes measured immediately before the operation with a fresh post-operation scan. The result shows actual allocated bytes saved or added and the percentage change; if either scan is incomplete, both totals are marked unavailable instead of presenting partial measurements.
+
 ## Requirements
 
 - Windows 10 or later with NTFS volumes

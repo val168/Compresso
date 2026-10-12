@@ -44,6 +44,8 @@ private:
     void showDiagnostics();
 
     QLineEdit* directoryPath_ = nullptr;
+    QLabel* originalSizeLabel_ = nullptr;
+    QLabel* compressedSizeLabel_ = nullptr;
     QLabel* originalSizeValue_ = nullptr;
     QLabel* compressedSizeValue_ = nullptr;
     QLabel* fileCountValue_ = nullptr;

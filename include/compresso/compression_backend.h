@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compresso/operation_error.h"
+#include "compresso/compression_summary.h"
 
 #include <chrono>
 #include <filesystem>
@@ -82,6 +83,8 @@ struct CompressionReport
     std::optional<OperationError> error;
     std::vector<OperationError> issues;
     std::vector<CompressionFileResult> files;
+    std::optional<CompressionSizeSummary> size_summary;
+    std::optional<OperationError> size_measurement_error;
 
     [[nodiscard]] std::size_t compressedCount() const noexcept;
     [[nodiscard]] std::size_t restoredCount() const noexcept;

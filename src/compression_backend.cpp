@@ -805,6 +805,25 @@ compresso::CompressionReport runDirectoryOperation(
         appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
     }
 
+    if (!restoring) {
+        const ScanResult finalScan = DirectoryScanner::scan(canonicalDirectory);
+        report.issues.insert(report.issues.end(), finalScan.errors.begin(), finalScan.errors.end());
+        if (scan.traversal_complete && scan.allocation_measurements_complete
+            && finalScan.traversal_complete && finalScan.allocation_measurements_complete) {
+            report.size_summary = calculateCompressionSizeSummary(
+                scan.total_allocated_bytes, finalScan.total_allocated_bytes);
+        } else {
+            OperationError measurementError;
+            measurementError.code = OperationErrorCode::inaccessible_file;
+            measurementError.path = canonicalDirectory;
+            measurementError.technical_details =
+                "Allocated size totals are unavailable because the pre-compression scan or "
+                "post-compression scan could not measure every file and directory.";
+            report.size_measurement_error = measurementError;
+            report.issues.push_back(std::move(measurementError));
+        }
+    }
+
     return report;
 }
 

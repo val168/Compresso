@@ -124,18 +124,23 @@ MainWindow::MainWindow(QWidget* parent)
 
     const auto addDetail = [content, details](int row, const QString& labelText,
                                               const QString& valueText,
-                                              const char* valueObjectName) {
+                                              const char* valueObjectName,
+                                              QLabel** labelOut = nullptr) {
         auto* label = new QLabel(labelText, content);
         auto* value = new QLabel(valueText, content);
         value->setObjectName(QString::fromLatin1(valueObjectName));
         details->addWidget(label, row, 0);
         details->addWidget(value, row, 1, Qt::AlignLeft);
+        if (labelOut != nullptr) {
+            *labelOut = label;
+        }
         return value;
     };
 
-    originalSizeValue_ = addDetail(0, "Original size (logical)", "\u2014", "originalSizeValue");
+    originalSizeValue_ = addDetail(0, "Original size (logical)", "\u2014", "originalSizeValue",
+                                   &originalSizeLabel_);
     compressedSizeValue_ = addDetail(1, "Allocated size (on disk)", "\u2014",
-                                     "compressedSizeValue");
+                                     "compressedSizeValue", &compressedSizeLabel_);
     addDetail(2, "Compression method", "LZX", "compressionMethodValue");
     fileCountValue_ = addDetail(3, "Files scanned", "\u2014", "fileCountValue");
     filesystemValue_ = addDetail(4, "Filesystem / LZX", "\u2014", "filesystemValue");
@@ -377,6 +382,8 @@ void MainWindow::browseForDirectory()
 void MainWindow::handleDirectoryTextChanged()
 {
     validatedDirectory_.clear();
+    originalSizeLabel_->setText("Original size (logical)");
+    compressedSizeLabel_->setText("Allocated size (on disk)");
     originalSizeValue_->setText("\u2014");
     compressedSizeValue_->setText("\u2014");
     fileCountValue_->setText("\u2014");
@@ -436,6 +443,8 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
         return;
     }
 
+    originalSizeLabel_->setText("Original size (logical)");
+    compressedSizeLabel_->setText("Allocated size (on disk)");
     const QLocale locale;
     originalSizeValue_->setText(
         locale.toString(static_cast<qulonglong>(result.total_logical_bytes)) + " bytes");
@@ -548,7 +557,6 @@ void MainWindow::displayCompressionResult(const compresso::CompressionReport& re
     }
 
     const QLocale locale;
-    compressedSizeValue_->setText("\u2014");
     analyzedDirectoryIsEligible_ = false;
     diagnosticLines_.clear();
     for (const auto& issue : result.issues) {
@@ -562,34 +570,54 @@ void MainWindow::displayCompressionResult(const compresso::CompressionReport& re
                                                   : skippedFileText(file));
         }
     }
+    if (result.size_summary) {
+        const auto& summary = *result.size_summary;
+        originalSizeLabel_->setText("Original allocated size");
+        compressedSizeLabel_->setText("Final allocated size");
+        originalSizeValue_->setText(
+            locale.toString(static_cast<qulonglong>(summary.original_allocated_bytes))
+            + " bytes");
+        compressedSizeValue_->setText(
+            locale.toString(static_cast<qulonglong>(summary.final_allocated_bytes))
+            + " bytes");
+    } else {
+        originalSizeLabel_->setText("Original allocated size");
+        compressedSizeLabel_->setText("Final allocated size");
+        originalSizeValue_->setText("Unavailable");
+        compressedSizeValue_->setText("Unavailable");
+        if (result.size_measurement_error) {
+            diagnosticLines_.push_back(diagnosticText(*result.size_measurement_error));
+        }
+    }
     detailsButton_->setVisible(!diagnosticLines_.isEmpty());
 
     QString message = "LZX: "
-        + locale.toString(static_cast<qulonglong>(result.compressedCount())) + " compressed";
-    if (result.skippedCount() > 0) {
-        message += ", " + locale.toString(static_cast<qulonglong>(result.skippedCount()))
-                   + " skipped";
-        if (result.failedCount() == 0) {
-            const auto skippedIssue = std::find_if(result.files.begin(), result.files.end(),
-                [](const auto& file) {
-                    return file.state == compresso::CompressionFileState::skipped
-                           && file.error.has_value();
-                });
-            if (skippedIssue != result.files.end()) {
-                message += ". " + skippedIssue->error_message;
+        + locale.toString(static_cast<qulonglong>(result.compressedCount())) + " compressed, "
+        + locale.toString(static_cast<qulonglong>(result.skippedCount())) + " skipped, "
+        + locale.toString(static_cast<qulonglong>(result.failedCount())) + " failed. ";
+    if (result.size_summary) {
+        const auto& summary = *result.size_summary;
+        if (summary.bytes_increased > 0) {
+            message += "Allocated usage increased by "
+                + locale.toString(static_cast<qulonglong>(summary.bytes_increased)) + " bytes";
+            if (summary.percentage_available) {
+                message += " (" + locale.toString(
+                    static_cast<double>(-summary.percentage_saved), 'f', 1) + "% more)";
+            } else {
+                message += " (percentage unavailable for zero original allocation)";
+            }
+        } else {
+            message += "Saved "
+                + locale.toString(static_cast<qulonglong>(summary.bytes_saved)) + " bytes";
+            if (summary.percentage_available) {
+                message += " (" + locale.toString(
+                    static_cast<double>(summary.percentage_saved), 'f', 1) + "% allocated)";
             }
         }
+    } else {
+        message += "Allocated size unavailable (scan incomplete)";
     }
-    if (result.failedCount() > 0) {
-        message += ", " + locale.toString(static_cast<qulonglong>(result.failedCount()))
-                   + " failed";
-        const auto firstFailure = std::find_if(result.files.begin(), result.files.end(),
-            [](const auto& file) { return file.state == compresso::CompressionFileState::failed; });
-        if (firstFailure != result.files.end() && firstFailure->error) {
-            message += ". " + firstFailure->error_message;
-        }
-    }
-    message += ". Analyze again to refresh allocated size.";
+    message += ".";
     if (!diagnosticLines_.isEmpty()) message += " See Details.";
     statusBar()->showMessage(message);
 }
