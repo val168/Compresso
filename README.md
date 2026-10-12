@@ -10,7 +10,7 @@ The current Qt Widgets interface supports selecting a game directory with the Wi
 - CMake 3.25 or later
 - Ninja
 - GCC/MinGW-w64 with C++23 support
-- Qt 6 Widgets built for the same MinGW toolchain
+- Qt 6 Widgets and Concurrent built for the same MinGW toolchain
 
 If Qt is not in a standard CMake search location, set `CMAKE_PREFIX_PATH` to its installation prefix (the directory containing `lib/cmake/Qt6`). For example, in PowerShell: `$env:CMAKE_PREFIX_PATH = 'C:/Qt/6.x.x/mingw_64'`.
 
@@ -44,6 +44,8 @@ Run `out/build/debug/Compresso.exe`. Ensure the Qt 6 and MinGW runtime `bin` dir
 ## Compression design constraint
 
 The planned operation is Windows `compact.exe /EXE:LZX`, applied directly to files on NTFS. The implementation must preserve in-place paths and must not introduce ZIP, CAB, 7z, or a custom archive format. See [the compression design note](docs/compression.md).
+
+See [the filesystem scanning note](docs/filesystem-scanning.md) for the scanner API and its handling of inaccessible entries and reparse points.
 
 ## License
 

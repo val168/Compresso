@@ -1,23 +1,26 @@
 #include "compresso/main_window.h"
 #include "compresso/directory_validator.h"
 
+#include <QFutureWatcher>
 #include <QFileDialog>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLocale>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QStatusBar>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrentRun>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle("Compresso");
     setMinimumWidth(420);
-    resize(520, 250);
+    resize(520, 270);
 
     auto* content = new QWidget(this);
     content->setObjectName("mainContent");
@@ -63,10 +66,11 @@ MainWindow::MainWindow(QWidget* parent)
     originalSizeValue_ = addDetail(0, "Original size", "—", "originalSizeValue");
     compressedSizeValue_ = addDetail(1, "Compressed size", "—", "compressedSizeValue");
     addDetail(2, "Compression method", "LZX", "compressionMethodValue");
+    fileCountValue_ = addDetail(3, "Files scanned", "—", "fileCountValue");
 
-    auto* analyzeButton = new QPushButton("Analyze", content);
-    analyzeButton->setObjectName("analyzeButton");
-    analyzeButton->setEnabled(false);
+    analyzeButton_ = new QPushButton("Analyze", content);
+    analyzeButton_->setObjectName("analyzeButton");
+    analyzeButton_->setEnabled(false);
     auto* compressButton = new QPushButton("Compress", content);
     compressButton->setObjectName("compressButton");
     compressButton->setEnabled(false);
@@ -77,7 +81,7 @@ MainWindow::MainWindow(QWidget* parent)
     auto* actions = new QHBoxLayout;
     actions->setSpacing(8);
     actions->addStretch();
-    actions->addWidget(analyzeButton);
+    actions->addWidget(analyzeButton_);
     actions->addWidget(compressButton);
     actions->addWidget(restoreButton);
 
@@ -93,10 +97,16 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->setObjectName("operationStatus");
     statusBar()->showMessage("Select a game directory to get started.");
 
+    scanWatcher_ = new QFutureWatcher<compresso::ScanResult>(this);
+
     connect(directoryPath_, &QLineEdit::textChanged, this,
             [this] { handleDirectoryTextChanged(); });
     connect(directoryPath_, &QLineEdit::editingFinished, this,
             [this] { validateDirectoryPath(); });
+    connect(analyzeButton_, &QPushButton::clicked, this,
+            [this] { startDirectoryScan(); });
+    connect(scanWatcher_, &QFutureWatcher<compresso::ScanResult>::finished, this,
+            [this] { displayScanResult(); });
 }
 
 void MainWindow::browseForDirectory()
@@ -117,6 +127,8 @@ void MainWindow::handleDirectoryTextChanged()
     validatedDirectory_.clear();
     originalSizeValue_->setText("—");
     compressedSizeValue_->setText("—");
+    fileCountValue_->setText("—");
+    analyzeButton_->setEnabled(false);
 
     if (directoryPath_->text().isEmpty()) {
         statusBar()->showMessage("Select a game directory to get started.");
@@ -137,4 +149,57 @@ void MainWindow::validateDirectoryPath()
 
     validatedDirectory_ = path;
     statusBar()->showMessage("Directory is ready. Compression is not implemented.");
+    analyzeButton_->setEnabled(!scanWatcher_->isRunning());
+}
+
+void MainWindow::startDirectoryScan()
+{
+    if (scanWatcher_->isRunning()) {
+        return;
+    }
+    if (validatedDirectory_.isEmpty() || validatedDirectory_ != directoryPath_->text()) {
+        validateDirectoryPath();
+    }
+    if (validatedDirectory_.isEmpty()) {
+        analyzeButton_->setEnabled(false);
+        return;
+    }
+
+    scanningDirectory_ = validatedDirectory_;
+    analyzeButton_->setEnabled(false);
+    statusBar()->showMessage("Scanning directory…");
+
+    const std::filesystem::path root(scanningDirectory_.toStdWString());
+    scanWatcher_->setFuture(QtConcurrent::run([root] {
+        return compresso::DirectoryScanner::scan(root);
+    }));
+}
+
+void MainWindow::displayScanResult()
+{
+    const compresso::ScanResult result = scanWatcher_->result();
+    const QString scannedDirectory = scanningDirectory_;
+    scanningDirectory_.clear();
+
+    if (scannedDirectory != directoryPath_->text()
+        || scannedDirectory != validatedDirectory_) {
+        analyzeButton_->setEnabled(!validatedDirectory_.isEmpty());
+        return;
+    }
+
+    const QLocale locale;
+    originalSizeValue_->setText(
+        locale.toString(static_cast<qulonglong>(result.total_directory_size_bytes)) + " bytes");
+    fileCountValue_->setText(locale.toString(static_cast<qulonglong>(result.total_file_count)));
+
+    QString message = result.traversal_complete ? "Scan complete: " : "Scan incomplete: ";
+    message += locale.toString(static_cast<qulonglong>(result.total_file_count)) + " files";
+    if (!result.skipped_entries.empty()) {
+        message += "; "
+            + locale.toString(static_cast<qulonglong>(result.skipped_entries.size()))
+            + " items skipped";
+    }
+    message += ".";
+    statusBar()->showMessage(message);
+    analyzeButton_->setEnabled(true);
 }
