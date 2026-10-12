@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QAction>
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QFile>
 #include <QLabel>
@@ -18,6 +19,8 @@
 #include <QPlainTextEdit>
 #include <QStatusBar>
 #include <QScreen>
+#include <QSettings>
+#include <QSize>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QtTest>
@@ -91,6 +94,23 @@ class MainWindowTests final : public QObject
     Q_OBJECT
 
 private slots:
+    void init()
+    {
+        QCoreApplication::setOrganizationName(QStringLiteral("CompressoTests"));
+        QCoreApplication::setApplicationName(QStringLiteral("CompressoTests"));
+        QSettings settings;
+        settings.remove(QStringLiteral("directory/lastSelected"));
+        settings.remove(QStringLiteral("window/geometry"));
+    }
+
+    void cleanup()
+    {
+        QSettings settings;
+        settings.remove(QStringLiteral("directory/lastSelected"));
+        settings.remove(QStringLiteral("window/geometry"));
+        settings.setValue(QStringLiteral("appearance/theme"), QStringLiteral("system"));
+    }
+
     void presentsDirectoryAndCompressionDetails()
     {
         MainWindow window;
@@ -158,6 +178,82 @@ private slots:
         if (qApp->primaryScreen() != nullptr) {
             QVERIFY(qApp->primaryScreen()->devicePixelRatio() >= 1.0);
         }
+    }
+
+    void restoresValidatedDirectoryAndWindowGeometry()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QByteArray savedGeometry;
+        QSize expectedSize;
+        {
+            MainWindow source;
+            source.resize(660, 410);
+            savedGeometry = source.saveGeometry();
+            expectedSize = source.size();
+        }
+
+        QSettings settings;
+        settings.setValue(QStringLiteral("directory/lastSelected"), directory.path());
+        settings.setValue(QStringLiteral("window/geometry"), savedGeometry);
+        settings.sync();
+        QCOMPARE(compresso::directoryValidationError(directory.path()), QString());
+        QCOMPARE(settings.value(QStringLiteral("directory/lastSelected")).toString(),
+                 directory.path());
+
+        MainWindow restored;
+        const auto* path = restored.findChild<QLineEdit*>("gameDirectoryPath");
+        const auto* analyze = restored.findChild<QPushButton*>("analyzeButton");
+        QVERIFY(path);
+        QVERIFY(analyze);
+        QCOMPARE(path->text(), directory.path());
+        QVERIFY(analyze->isEnabled());
+        // At elevated scale factors Qt may clamp the restored width to the available
+        // virtual desktop. Height remains within bounds and confirms that geometry loaded.
+        QCOMPARE(restored.height(), expectedSize.height());
+    }
+
+    void ignoresInvalidSavedDirectoryAndMalformedSettings()
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("directory/lastSelected"),
+                          QDir::tempPath() + QStringLiteral("/Compresso-missing-directory"));
+        settings.setValue(QStringLiteral("window/geometry"), QStringLiteral("invalid geometry"));
+        settings.setValue(QStringLiteral("appearance/theme"), QStringLiteral("obsolete-theme"));
+
+        MainWindow window;
+        const auto* path = window.findChild<QLineEdit*>("gameDirectoryPath");
+        const auto* analyze = window.findChild<QPushButton*>("analyzeButton");
+        const auto* systemTheme = window.findChild<QAction*>("themeSystemAction");
+        QVERIFY(path);
+        QVERIFY(analyze);
+        QVERIFY(systemTheme);
+        QVERIFY(path->text().isEmpty());
+        QVERIFY(!analyze->isEnabled());
+        QVERIFY(systemTheme->isChecked());
+        QVERIFY(window.minimumWidth() >= 420);
+        QVERIFY(!settings.contains(QStringLiteral("directory/lastSelected")));
+    }
+
+    void savesValidatedDirectoryAndWindowGeometry()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        MainWindow window;
+        window.resize(640, 390);
+        auto* path = window.findChild<QLineEdit*>("gameDirectoryPath");
+        QVERIFY(path);
+        window.show();
+        path->setText(directory.path());
+        QVERIFY(QMetaObject::invokeMethod(path, "editingFinished", Qt::DirectConnection));
+
+        QSettings settings;
+        QCOMPARE(settings.value(QStringLiteral("directory/lastSelected")).toString(),
+                 directory.path());
+        window.close();
+        QVERIFY(!settings.value(QStringLiteral("window/geometry")).toByteArray().isEmpty());
     }
 
     void enablesAnalysisOnlyAfterDirectorySelection()

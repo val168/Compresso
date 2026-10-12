@@ -22,6 +22,7 @@
 #include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QStatusBar>
+#include <QSettings>
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -100,6 +101,9 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle("Compresso");
     setMinimumWidth(420);
     resize(520, 270);
+    QSettings settings;
+    const QByteArray savedGeometry = settings.value(QStringLiteral("window/geometry"))
+                                         .toByteArray();
 
     auto* appearanceMenu = menuBar()->addMenu(tr("Appearance"));
     auto* themeActions = new QActionGroup(this);
@@ -249,6 +253,20 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { startCompression(); });
     connect(restoreButton_, &QPushButton::clicked, this,
             [this] { startRestore(); });
+
+    const QString savedDirectory = settings.value(QStringLiteral("directory/lastSelected"))
+                                       .toString();
+    if (!savedDirectory.isEmpty()) {
+        if (compresso::directoryValidationError(savedDirectory).isEmpty()) {
+            directoryPath_->setText(savedDirectory);
+            validateDirectoryPath();
+        } else {
+            settings.remove(QStringLiteral("directory/lastSelected"));
+        }
+    }
+    if (!savedGeometry.isEmpty()) {
+        restoreGeometry(savedGeometry);
+    }
 }
 
 MainWindow::~MainWindow()
@@ -260,6 +278,8 @@ MainWindow::~MainWindow()
         operationThread_->quit();
         operationThread_->wait();
     }
+    QSettings settings;
+    settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
@@ -272,6 +292,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
         return;
     }
     event->accept();
+    QSettings settings;
+    settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
 }
 
 void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QString& directory)
@@ -484,6 +506,8 @@ void MainWindow::validateDirectoryPath()
     }
 
     validatedDirectory_ = path;
+    QSettings settings;
+    settings.setValue(QStringLiteral("directory/lastSelected"), validatedDirectory_);
     statusBar()->showMessage("Directory is ready. Analyze it before compression.");
     analyzeButton_->setEnabled(true);
 }
