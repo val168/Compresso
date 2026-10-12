@@ -24,13 +24,20 @@ void OperationWorker::run()
                     }
                 });
             emit scanCompleted(std::move(result));
-        } else {
+        } else if (kind_ == Kind::compress) {
             emit progressChanged(QStringLiteral("Preparing transparent NTFS LZX compression…"));
             CompressionReport result = CompressionBackend::compressDirectory(
                 directory_, [this](const CompressionProgress& progress) {
                     emit compressionProgress(progress);
                 });
             emit compressionCompleted(std::move(result));
+        } else {
+            emit progressChanged(QStringLiteral("Preparing transparent NTFS LZX restoration…"));
+            CompressionReport result = CompressionBackend::restoreDirectory(
+                directory_, [this](const CompressionProgress& progress) {
+                    emit compressionProgress(progress);
+                });
+            emit restorationCompleted(std::move(result));
         }
     } catch (const std::exception& exception) {
         emit errorOccurred(QString::fromLocal8Bit(exception.what()));

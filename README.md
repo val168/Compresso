@@ -2,9 +2,9 @@
 
 Compresso is a Windows-only desktop utility for applying native transparent NTFS LZX compression to game folders. Compressed files remain in place and games remain directly accessible; no archive or extraction workflow is involved.
 
-The Qt Widgets interface supports selecting a game directory with the Windows folder picker or entering its path manually. Analyze reports logical size, current allocated size, file count, and filesystem LZX eligibility. Compress applies native `compact.exe /C /EXE:LZX` compression in place to eligible files on local NTFS volumes.
+The Qt Widgets interface supports selecting a game directory with the Windows folder picker or entering its path manually. Analyze reports logical size, current allocated size, file count, and filesystem LZX eligibility. Compress applies native `compact.exe /C /EXE:LZX` compression in place to eligible files on local NTFS volumes. Restore asks for confirmation, then reverses Compresso's WOF LZX compression with `compact.exe /U /EXE:LZX`; other algorithms are skipped. Files stay in the selected installation and retain their contents.
 
-Background compression reports completed files, logical bytes accounted for, elapsed time, and the current filename. Its standard progress bar remains indeterminate until the target file count is known, then reflects completed file outcomes.
+Background compression and restoration report completed files, logical bytes accounted for, elapsed time, and the current filename. Their standard progress bar remains indeterminate until the target file count is known, then reflects completed file outcomes.
 
 ## Requirements
 

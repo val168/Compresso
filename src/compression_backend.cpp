@@ -3,6 +3,8 @@
 #include "compresso/directory_scanner.h"
 
 #include <QProcess>
+#include <QCryptographicHash>
+#include <QFile>
 
 #include <algorithm>
 #include <array>
@@ -155,6 +157,80 @@ bool sameFileStamp(const FileStamp& left, const FileStamp& right)
            && a.ftLastWriteTime.dwLowDateTime == b.ftLastWriteTime.dwLowDateTime;
 }
 
+bool sameFileIdentityAndSize(const FileStamp& left, const FileStamp& right)
+{
+    const auto& a = left.information;
+    const auto& b = right.information;
+    return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber
+           && a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow
+           && a.nFileSizeHigh == b.nFileSizeHigh && a.nFileSizeLow == b.nFileSizeLow;
+}
+
+enum class LzxBackingState
+{
+    lzx_compressed,
+    other_or_uncompressed,
+    unavailable
+};
+
+constexpr ULONG wofProviderFile = 2;
+constexpr ULONG fileProviderCompressionLzx = 1;
+
+struct WofCompressionInfo
+{
+    ULONG algorithm;
+    ULONG flags;
+};
+
+using WofIsExternalFileFunction = HRESULT(WINAPI*)(LPCWSTR, PBOOL, PULONG, PVOID, PULONG);
+
+LzxBackingState lzxBackingState(const std::filesystem::path& path)
+{
+    static const HMODULE wofModule = LoadLibraryW(L"wofutil.dll");
+    if (wofModule == nullptr) {
+        return LzxBackingState::unavailable;
+    }
+    const auto inspect = reinterpret_cast<WofIsExternalFileFunction>(
+        GetProcAddress(wofModule, "WofIsExternalFile"));
+    if (inspect == nullptr) {
+        return LzxBackingState::unavailable;
+    }
+
+    BOOL external = FALSE;
+    ULONG provider = 0;
+    WofCompressionInfo info{};
+    ULONG infoLength = sizeof(info);
+    const HRESULT result = inspect(path.c_str(), &external, &provider, &info, &infoLength);
+    if (FAILED(result)) {
+        return LzxBackingState::unavailable;
+    }
+    if (external == FALSE || provider != wofProviderFile) {
+        return LzxBackingState::other_or_uncompressed;
+    }
+    if (infoLength < sizeof(info)) {
+        return LzxBackingState::unavailable;
+    }
+
+    // WIM-backed files and other WOF algorithms are deliberately left untouched.
+    if (info.algorithm == fileProviderCompressionLzx) {
+        return LzxBackingState::lzx_compressed;
+    }
+    return LzxBackingState::other_or_uncompressed;
+}
+
+QByteArray fileDigest(const std::filesystem::path& path)
+{
+    QFile file(QString::fromStdWString(path.native()));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&file)) {
+        return {};
+    }
+    return hash.result();
+}
+
 compresso::CompressionFileResult skipped(const std::filesystem::path& path,
                                          compresso::CompressionSkipReason reason,
                                          QString error = {})
@@ -196,12 +272,14 @@ QString skipReasonMessage(compresso::SkipReason reason)
 }
 
 compresso::CompactProcessResult runCompact(const std::filesystem::path& executable,
-                                           const std::filesystem::path& file)
+                                           const std::filesystem::path& file,
+                                           bool restoring = false)
 {
     QProcess process;
     process.setProgram(QString::fromStdWString(executable.native()));
-    process.setArguments({QStringLiteral("/C"), QStringLiteral("/EXE:LZX"),
-                          QStringLiteral("/Q"), QString::fromStdWString(file.native())});
+    process.setArguments({restoring ? QStringLiteral("/U") : QStringLiteral("/C"),
+                          QStringLiteral("/EXE:LZX"), QStringLiteral("/Q"),
+                          QString::fromStdWString(file.native())});
     process.start();
 
     compresso::CompactProcessResult result;
@@ -235,6 +313,13 @@ std::size_t compresso::CompressionReport::compressedCount() const noexcept
     }));
 }
 
+std::size_t compresso::CompressionReport::restoredCount() const noexcept
+{
+    return static_cast<std::size_t>(std::count_if(files.begin(), files.end(), [](const auto& file) {
+        return file.state == CompressionFileState::restored;
+    }));
+}
+
 std::size_t compresso::CompressionReport::skippedCount() const noexcept
 {
     return static_cast<std::size_t>(std::count_if(files.begin(), files.end(), [](const auto& file) {
@@ -249,9 +334,16 @@ std::size_t compresso::CompressionReport::failedCount() const noexcept
     }));
 }
 
-compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
+namespace
+{
+
+using namespace compresso;
+using ProgressCallback = CompressionBackend::ProgressCallback;
+using ProcessRunner = CompressionBackend::ProcessRunner;
+
+compresso::CompressionReport runDirectoryOperation(
     const std::filesystem::path& directory, ProgressCallback progress,
-    ProcessRunner processRunner)
+    ProcessRunner processRunner, bool restoring)
 {
     const auto startedAt = std::chrono::steady_clock::now();
     const auto elapsed = [&] {
@@ -268,7 +360,7 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
         return report;
     }
     if ((selectedAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-        report.rejection_reason = "Symbolic links and junctions cannot be compressed.";
+        report.rejection_reason = "Symbolic links and junctions cannot be processed.";
         return report;
     }
 
@@ -283,7 +375,7 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
     const DWORD directoryAttributes = GetFileAttributesW(canonicalDirectory.c_str());
     if (directoryAttributes == INVALID_FILE_ATTRIBUTES
         || (directoryAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-        report.rejection_reason = "Symbolic links and junctions cannot be compressed.";
+        report.rejection_reason = "Symbolic links and junctions cannot be processed.";
         return report;
     }
 
@@ -363,7 +455,9 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
             }
         });
     if (!processRunner) {
-        processRunner = runCompact;
+        processRunner = [restoring](const auto& executable, const auto& file) {
+            return runCompact(executable, file, restoring);
+        };
     }
     const std::size_t totalFiles = scan.files.size();
     std::size_t completedFiles = 0;
@@ -408,10 +502,27 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
         }
         if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
             appendResult(skipped(filePath, CompressionSkipReason::reparse_point,
-                                 "Symbolic links and junctions are not compressed."),
+                                 "Symbolic links and junctions are not processed."),
                          scannedFile.logical_size_bytes);
             continue;
         }
+
+        if (restoring) {
+            const LzxBackingState backingState = lzxBackingState(filePath);
+            if (backingState == LzxBackingState::unavailable) {
+                appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
+                                     "Windows could not verify the file's LZX algorithm."),
+                             scannedFile.logical_size_bytes);
+                continue;
+            }
+            if (backingState != LzxBackingState::lzx_compressed) {
+                appendResult(skipped(filePath, CompressionSkipReason::not_lzx_compressed,
+                                     "The file is not WOF LZX-compressed."),
+                             scannedFile.logical_size_bytes);
+                continue;
+            }
+        }
+
         if ((attributes & FILE_ATTRIBUTE_ENCRYPTED) != 0) {
             appendResult(skipped(filePath, CompressionSkipReason::encrypted,
                                  "Encrypted files are not compressed."), scannedFile.logical_size_bytes);
@@ -422,9 +533,9 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
                                  "Sparse files are not compressed."), scannedFile.logical_size_bytes);
             continue;
         }
-        if ((attributes & FILE_ATTRIBUTE_COMPRESSED) != 0
+        if (!restoring && ((attributes & FILE_ATTRIBUTE_COMPRESSED) != 0
             || (scannedFile.allocated_size_available
-                && scannedFile.allocated_size_bytes < scannedFile.logical_size_bytes)) {
+                && scannedFile.allocated_size_bytes < scannedFile.logical_size_bytes))) {
             appendResult(skipped(filePath, CompressionSkipReason::already_compressed,
                                  "The file is already compressed or its allocation "
                                  "is below its logical size."), scannedFile.logical_size_bytes);
@@ -438,9 +549,23 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
                          scannedFile.logical_size_bytes);
             continue;
         }
-        if (!scannedFile.allocated_size_available) {
+        if (restoring && before.information.nNumberOfLinks > 1) {
+            appendResult(skipped(filePath, CompressionSkipReason::multiple_hard_links,
+                                 "Files with multiple hard links are excluded from restoration."),
+                         scannedFile.logical_size_bytes);
+            continue;
+        }
+        if (!restoring && !scannedFile.allocated_size_available) {
             appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
                                  "The current disk allocation could not be measured."),
+                         scannedFile.logical_size_bytes);
+            continue;
+        }
+
+        const QByteArray originalDigest = restoring ? fileDigest(filePath) : QByteArray{};
+        if (restoring && originalDigest.isEmpty()) {
+            appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
+                                 "The file contents could not be verified."),
                          scannedFile.logical_size_bytes);
             continue;
         }
@@ -479,9 +604,31 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
         }
 
         FileStamp after;
-        if (!readFileStamp(filePath, after) || !sameFileStamp(before, after)) {
+        if (!readFileStamp(filePath, after)
+            || (restoring ? !sameFileIdentityAndSize(before, after)
+                          : !sameFileStamp(before, after))) {
             fileResult.state = CompressionFileState::failed;
-            fileResult.error_message = "The file changed or became busy during compression.";
+            fileResult.error_message = restoring
+                ? "The file identity or size changed during restoration."
+                : "The file changed or became busy during compression.";
+            appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
+            continue;
+        }
+
+        if (restoring) {
+            const LzxBackingState finalBackingState = lzxBackingState(filePath);
+            if (finalBackingState == LzxBackingState::unavailable) {
+                fileResult.state = CompressionFileState::failed;
+                fileResult.error_message = "The restored file's compression state could not be verified.";
+            } else if (finalBackingState == LzxBackingState::lzx_compressed) {
+                fileResult.state = CompressionFileState::failed;
+                fileResult.error_message = "The file remains LZX-compressed.";
+            } else if (fileDigest(filePath) != originalDigest) {
+                fileResult.state = CompressionFileState::failed;
+                fileResult.error_message = "The file contents changed during restoration.";
+            } else {
+                fileResult.state = CompressionFileState::restored;
+            }
             appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
             continue;
         }
@@ -508,4 +655,20 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
     }
 
     return report;
+}
+
+} // namespace
+
+compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
+    const std::filesystem::path& directory, ProgressCallback progress,
+    ProcessRunner processRunner)
+{
+    return runDirectoryOperation(directory, std::move(progress), std::move(processRunner), false);
+}
+
+compresso::CompressionReport compresso::CompressionBackend::restoreDirectory(
+    const std::filesystem::path& directory, ProgressCallback progress,
+    ProcessRunner processRunner)
+{
+    return runDirectoryOperation(directory, std::move(progress), std::move(processRunner), true);
 }

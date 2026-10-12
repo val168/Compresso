@@ -16,7 +16,8 @@ public:
     enum class Kind
     {
         scan,
-        compress
+        compress,
+        restore
     };
 
     OperationWorker(Kind kind, std::filesystem::path directory);
@@ -27,6 +28,7 @@ public slots:
 signals:
     void scanCompleted(compresso::ScanResult result);
     void compressionCompleted(compresso::CompressionReport result);
+    void restorationCompleted(compresso::CompressionReport result);
     void compressionProgress(compresso::CompressionProgress progress);
     void progressChanged(QString message);
     void errorOccurred(QString message);

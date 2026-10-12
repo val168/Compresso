@@ -16,6 +16,7 @@ namespace compresso
 enum class CompressionFileState
 {
     compressed,
+    restored,
     skipped,
     failed
 };
@@ -25,9 +26,11 @@ enum class CompressionSkipReason
     inaccessible,
     reparse_point,
     already_compressed,
+    not_lzx_compressed,
     encrypted,
     sparse,
     active_or_busy,
+    multiple_hard_links,
     unsupported_entry
 };
 
@@ -73,6 +76,7 @@ struct CompressionReport
     std::vector<CompressionFileResult> files;
 
     [[nodiscard]] std::size_t compressedCount() const noexcept;
+    [[nodiscard]] std::size_t restoredCount() const noexcept;
     [[nodiscard]] std::size_t skippedCount() const noexcept;
     [[nodiscard]] std::size_t failedCount() const noexcept;
 };
@@ -85,6 +89,9 @@ public:
         const std::filesystem::path& executable, const std::filesystem::path& file)>;
 
     [[nodiscard]] static CompressionReport compressDirectory(
+        const std::filesystem::path& directory, ProgressCallback progress = {},
+        ProcessRunner processRunner = {});
+    [[nodiscard]] static CompressionReport restoreDirectory(
         const std::filesystem::path& directory, ProgressCallback progress = {},
         ProcessRunner processRunner = {});
 };

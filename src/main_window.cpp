@@ -13,6 +13,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QProgressBar>
+#include <QMessageBox>
 #include <QStatusBar>
 #include <QThread>
 #include <QTimer>
@@ -87,16 +88,16 @@ MainWindow::MainWindow(QWidget* parent)
     compressButton_ = new QPushButton("Compress", content);
     compressButton_->setObjectName("compressButton");
     compressButton_->setEnabled(false);
-    auto* restoreButton = new QPushButton("Restore", content);
-    restoreButton->setObjectName("restoreButton");
-    restoreButton->setEnabled(false);
+    restoreButton_ = new QPushButton("Restore", content);
+    restoreButton_->setObjectName("restoreButton");
+    restoreButton_->setEnabled(false);
 
     auto* actions = new QHBoxLayout;
     actions->setSpacing(8);
     actions->addStretch();
     actions->addWidget(analyzeButton_);
     actions->addWidget(compressButton_);
-    actions->addWidget(restoreButton);
+    actions->addWidget(restoreButton_);
 
     layout->addWidget(directoryLabel);
     layout->addLayout(directoryRow);
@@ -135,6 +136,8 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { startDirectoryScan(); });
     connect(compressButton_, &QPushButton::clicked, this,
             [this] { startCompression(); });
+    connect(restoreButton_, &QPushButton::clicked, this,
+            [this] { startRestore(); });
 }
 
 MainWindow::~MainWindow()
@@ -158,20 +161,19 @@ void MainWindow::closeEvent(QCloseEvent* event)
     event->accept();
 }
 
-void MainWindow::startOperation(bool compressing, const QString& directory)
+void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QString& directory)
 {
     if (operationThread_ && operationThread_->isRunning()) {
         return;
     }
 
     setOperationControlsEnabled(false);
+    activeOperationIsRestore_ = kind == compresso::OperationWorker::Kind::restore;
     progressBar_->setRange(0, 0);
     progressBar_->show();
 
     auto* thread = new QThread(this);
-    auto* worker = new compresso::OperationWorker(
-        compressing ? compresso::OperationWorker::Kind::compress
-                    : compresso::OperationWorker::Kind::scan,
+    auto* worker = new compresso::OperationWorker(kind,
         std::filesystem::path(directory.toStdWString()));
     worker->moveToThread(thread);
 
@@ -188,6 +190,7 @@ void MainWindow::startOperation(bool compressing, const QString& directory)
             [this](const QString& message) {
                 analyzedDirectoryIsEligible_ = false;
                 compressButton_->setEnabled(false);
+                restoreButton_->setEnabled(false);
                 statusBar()->showMessage(message);
             });
     connect(worker, &compresso::OperationWorker::scanCompleted, this,
@@ -198,6 +201,11 @@ void MainWindow::startOperation(bool compressing, const QString& directory)
             [this, directory](const compresso::CompressionReport& result) {
                 progressTimer_->stop();
                 displayCompressionResult(result, directory);
+            });
+    connect(worker, &compresso::OperationWorker::restorationCompleted, this,
+            [this, directory](const compresso::CompressionReport& result) {
+                progressTimer_->stop();
+                displayRestoreResult(result, directory);
             });
     connect(worker, &compresso::OperationWorker::finished, thread, &QThread::quit);
     connect(thread, &QThread::finished, worker, &QObject::deleteLater);
@@ -256,9 +264,13 @@ void MainWindow::displayCompressionProgress(const compresso::CompressionProgress
               .arg(elapsedSeconds % 60, 2, 10, QLatin1Char('0'));
     QString message;
     if (!progress.totals_known) {
-        message = QStringLiteral("Scanning compression targets…");
+        message = activeOperationIsRestore_
+            ? QStringLiteral("Scanning restoration targets…")
+            : QStringLiteral("Scanning compression targets…");
     } else {
-        message = QStringLiteral("LZX %1/%2 files | logical %3 / %4 | elapsed %5")
+        message = QStringLiteral("%1 %2/%3 files | logical %4 / %5 | elapsed %6")
+            .arg(activeOperationIsRestore_ ? QStringLiteral("Restore")
+                                           : QStringLiteral("LZX"))
             .arg(static_cast<qulonglong>(progress.completed_files))
             .arg(static_cast<qulonglong>(progress.total_files))
             .arg(formatBytes(progress.processed_logical_bytes),
@@ -278,6 +290,7 @@ void MainWindow::setOperationControlsEnabled(bool enabled)
     directoryPath_->setEnabled(enabled);
     analyzeButton_->setEnabled(enabled && !validatedDirectory_.isEmpty());
     compressButton_->setEnabled(enabled && analyzedDirectoryIsEligible_);
+    restoreButton_->setEnabled(enabled && analyzedDirectoryIsEligible_);
 }
 
 void MainWindow::browseForDirectory()
@@ -302,6 +315,7 @@ void MainWindow::handleDirectoryTextChanged()
     filesystemValue_->setText("\u2014");
     analyzedDirectoryIsEligible_ = false;
     compressButton_->setEnabled(false);
+    restoreButton_->setEnabled(false);
     analyzeButton_->setEnabled(false);
 
     if (directoryPath_->text().isEmpty()) {
@@ -343,7 +357,8 @@ void MainWindow::startDirectoryScan()
     }
     analyzedDirectoryIsEligible_ = false;
     compressButton_->setEnabled(false);
-    startOperation(false, validatedDirectory_);
+    restoreButton_->setEnabled(false);
+    startOperation(compresso::OperationWorker::Kind::scan, validatedDirectory_);
 }
 
 void MainWindow::displayScanResult(const compresso::ScanResult& result,
@@ -385,6 +400,7 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     statusBar()->showMessage(message);
     analyzedDirectoryIsEligible_ = result.volume.compression_eligible
                                    && result.total_file_count > 0;
+    restoreButton_->setEnabled(analyzedDirectoryIsEligible_);
 }
 
 void MainWindow::startCompression()
@@ -400,7 +416,33 @@ void MainWindow::startCompression()
     compressionClock_.start();
     hasCompressionProgress_ = false;
     progressTimer_->start();
-    startOperation(true, validatedDirectory_);
+    startOperation(compresso::OperationWorker::Kind::compress, validatedDirectory_);
+}
+
+void MainWindow::startRestore()
+{
+    if (operationThread_ && operationThread_->isRunning()) {
+        return;
+    }
+    if (!analyzedDirectoryIsEligible_ || validatedDirectory_.isEmpty()
+        || validatedDirectory_ != directoryPath_->text()) {
+        return;
+    }
+
+    const auto answer = QMessageBox::question(
+        this, "Restore files",
+        "Remove transparent LZX compression from supported files in this game folder?\n"
+        "Files stay in place and keep their contents.",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    analyzedDirectoryIsEligible_ = false;
+    compressionClock_.start();
+    hasCompressionProgress_ = false;
+    progressTimer_->start();
+    startOperation(compresso::OperationWorker::Kind::restore, validatedDirectory_);
 }
 
 void MainWindow::displayCompressionResult(const compresso::CompressionReport& result,
@@ -424,6 +466,39 @@ void MainWindow::displayCompressionResult(const compresso::CompressionReport& re
 
     QString message = "LZX: "
         + locale.toString(static_cast<qulonglong>(result.compressedCount())) + " compressed";
+    if (result.skippedCount() > 0) {
+        message += ", " + locale.toString(static_cast<qulonglong>(result.skippedCount()))
+                   + " skipped";
+    }
+    if (result.failedCount() > 0) {
+        message += ", " + locale.toString(static_cast<qulonglong>(result.failedCount()))
+                   + " failed";
+    }
+    message += ". Analyze again to refresh allocated size.";
+    statusBar()->showMessage(message);
+}
+
+void MainWindow::displayRestoreResult(const compresso::CompressionReport& result,
+                                      const QString& directory)
+{
+    if (directory != directoryPath_->text() || directory != validatedDirectory_) {
+        return;
+    }
+
+    if (!result.target_eligible) {
+        statusBar()->showMessage(result.rejection_reason.isEmpty()
+            ? "The selected directory is not eligible for LZX restoration."
+            : result.rejection_reason);
+        analyzedDirectoryIsEligible_ = false;
+        return;
+    }
+
+    const QLocale locale;
+    compressedSizeValue_->setText("\u2014");
+    analyzedDirectoryIsEligible_ = false;
+
+    QString message = "Restore: "
+        + locale.toString(static_cast<qulonglong>(result.restoredCount())) + " restored";
     if (result.skippedCount() > 0) {
         message += ", " + locale.toString(static_cast<qulonglong>(result.skippedCount()))
                    + " skipped";

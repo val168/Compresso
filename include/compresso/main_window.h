@@ -2,6 +2,7 @@
 
 #include "compresso/compression_backend.h"
 #include "compresso/directory_scanner.h"
+#include "compresso/operation_worker.h"
 
 #include <QMainWindow>
 #include <QElapsedTimer>
@@ -25,7 +26,7 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
-    void startOperation(bool compressing, const QString& directory);
+    void startOperation(compresso::OperationWorker::Kind kind, const QString& directory);
     void setOperationControlsEnabled(bool enabled);
     void browseForDirectory();
     void handleDirectoryTextChanged();
@@ -33,8 +34,11 @@ private:
     void startDirectoryScan();
     void displayScanResult(const compresso::ScanResult& result, const QString& directory);
     void startCompression();
+    void startRestore();
     void displayCompressionResult(const compresso::CompressionReport& result,
                                   const QString& directory);
+    void displayRestoreResult(const compresso::CompressionReport& result,
+                              const QString& directory);
     void displayCompressionProgress(const compresso::CompressionProgress& progress);
 
     QLineEdit* directoryPath_ = nullptr;
@@ -45,6 +49,7 @@ private:
     QPushButton* browseButton_ = nullptr;
     QPushButton* analyzeButton_ = nullptr;
     QPushButton* compressButton_ = nullptr;
+    QPushButton* restoreButton_ = nullptr;
     QProgressBar* progressBar_ = nullptr;
     QTimer* progressTimer_ = nullptr;
     QElapsedTimer compressionClock_;
@@ -54,4 +59,5 @@ private:
     QString validatedDirectory_;
     bool closeAfterOperation_ = false;
     bool analyzedDirectoryIsEligible_ = false;
+    bool activeOperationIsRestore_ = false;
 };
