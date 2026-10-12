@@ -24,6 +24,10 @@ After compression, Compresso compares allocated bytes measured immediately befor
 
 If Qt is not in a standard CMake search location, set `CMAKE_PREFIX_PATH` to its installation prefix (the directory containing `lib/cmake/Qt6`). For example, in PowerShell: `$env:CMAKE_PREFIX_PATH = 'C:/Qt/6.x.x/mingw_64'`.
 
+## Continuous integration
+
+GitHub Actions builds and tests both CMake presets on `windows-latest`. The workflow uses the [MSYS2 setup action](https://github.com/msys2/setup-msys2) with UCRT64 packages: MinGW-w64 GCC, CMake, Ninja, and `mingw-w64-ucrt-x86_64-qt6-base` (Qt 6 Widgets and Test). These dependencies use one compatible UCRT64 ABI; the Qt installation prefix is `/ucrt64`. Tests that run real `compact.exe` compression use only per-test `QTemporaryDir` game folders and skip when the scanner reports that the folder is not on an eligible local NTFS volume. A compile or test failure fails its matrix job.
+
 ## Configure and build
 
 The included presets use Ninja and select GCC from `PATH`.

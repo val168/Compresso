@@ -855,6 +855,9 @@ private slots:
             std::filesystem::path(gameDirectory.toStdWString()));
         QVERIFY(beforeScan.allocation_measurements_complete);
         QVERIFY(beforeScan.traversal_complete);
+        if (!beforeScan.volume.compression_eligible) {
+            QSKIP("Temporary directory is not on a supported local NTFS volume.");
+        }
 
         std::vector<compresso::CompressionProgress> progressUpdates;
         const auto report = compresso::CompressionBackend::compressDirectory(

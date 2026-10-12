@@ -1,0 +1,45 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.preset }} build and tests
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [debug, release]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install MinGW-w64 UCRT64 and Qt 6
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+
+      - name: Configure ${{ matrix.preset }}
+        shell: msys2 {0}
+        run: cmake --preset ${{ matrix.preset }} "-DCMAKE_PREFIX_PATH=$(cygpath -m /ucrt64)"
+
+      - name: Build ${{ matrix.preset }}
+        shell: msys2 {0}
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Run ${{ matrix.preset }} tests
+        shell: msys2 {0}
+        run: ctest --test-dir out/build/${{ matrix.preset }} --output-on-failure
