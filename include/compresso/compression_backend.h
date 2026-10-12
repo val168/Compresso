@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <stop_token>
 #include <vector>
 
 #include <QByteArray>
@@ -21,7 +22,8 @@ enum class CompressionFileState
     compressed,
     restored,
     skipped,
-    failed
+    failed,
+    cancelled
 };
 
 enum class CompressionSkipReason
@@ -35,6 +37,7 @@ enum class CompressionSkipReason
     active_or_busy,
     multiple_hard_links,
     operation_aborted,
+    operation_cancelled,
     unsupported_entry
 };
 
@@ -66,6 +69,7 @@ struct CompactProcessResult
     bool started = false;
     bool finished = false;
     bool crashed = false;
+    bool cancelled = false;
     int exit_code = -1;
     QByteArray standard_output;
     QByteArray standard_error;
@@ -79,6 +83,7 @@ struct CompressionReport
     std::filesystem::path target_directory;
     std::wstring filesystem_type;
     bool target_eligible = false;
+    bool cancelled = false;
     QString rejection_reason;
     std::optional<OperationError> error;
     std::vector<OperationError> issues;
@@ -90,6 +95,7 @@ struct CompressionReport
     [[nodiscard]] std::size_t restoredCount() const noexcept;
     [[nodiscard]] std::size_t skippedCount() const noexcept;
     [[nodiscard]] std::size_t failedCount() const noexcept;
+    [[nodiscard]] std::size_t cancelledCount() const noexcept;
 };
 
 class CompressionBackend final
@@ -97,14 +103,15 @@ class CompressionBackend final
 public:
     using ProgressCallback = std::function<void(const CompressionProgress& progress)>;
     using ProcessRunner = std::function<CompactProcessResult(
-        const std::filesystem::path& executable, const std::filesystem::path& file)>;
+        const std::filesystem::path& executable, const std::filesystem::path& file,
+        std::stop_token cancellation)>;
 
     [[nodiscard]] static CompressionReport compressDirectory(
         const std::filesystem::path& directory, ProgressCallback progress = {},
-        ProcessRunner processRunner = {});
+        ProcessRunner processRunner = {}, std::stop_token cancellation = {});
     [[nodiscard]] static CompressionReport restoreDirectory(
         const std::filesystem::path& directory, ProgressCallback progress = {},
-        ProcessRunner processRunner = {});
+        ProcessRunner processRunner = {}, std::stop_token cancellation = {});
 };
 
 } // namespace compresso

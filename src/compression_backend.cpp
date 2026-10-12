@@ -269,6 +269,12 @@ compresso::CompressionFileResult aborted(const std::filesystem::path& path)
                    "Not attempted because an earlier serious error stopped the operation.");
 }
 
+compresso::CompressionFileResult cancelledBeforeStart(const std::filesystem::path& path)
+{
+    return skipped(path, compresso::CompressionSkipReason::operation_cancelled,
+                   "Not attempted because the operation was cancelled.");
+}
+
 compresso::CompressionFileResult failed(const std::filesystem::path& path, QString error)
 {
     compresso::CompressionFileResult result;
@@ -347,7 +353,7 @@ QString skipReasonMessage(compresso::SkipReason reason)
 
 compresso::CompactProcessResult runCompact(const std::filesystem::path& executable,
                                            const std::filesystem::path& file,
-                                           bool restoring = false)
+                                           bool restoring, std::stop_token cancellation)
 {
     QProcess process;
     process.setProgram(QString::fromStdWString(executable.native()));
@@ -357,14 +363,39 @@ compresso::CompactProcessResult runCompact(const std::filesystem::path& executab
     process.start();
 
     compresso::CompactProcessResult result;
-    if (!process.waitForStarted()) {
-        result.error_message = "compact.exe could not start: " + process.errorString();
-        result.error_code = compresso::OperationErrorCode::process_launch_failed;
-        result.native_error = static_cast<int>(process.error());
-        return result;
+    while (!process.waitForStarted(100)) {
+        if (cancellation.stop_requested() && process.state() != QProcess::NotRunning) {
+            result.cancelled = true;
+            process.kill();
+            process.waitForFinished(-1);
+            return result;
+        }
+        if (process.state() == QProcess::NotRunning) {
+            result.error_message = "compact.exe could not start: " + process.errorString();
+            result.error_code = compresso::OperationErrorCode::process_launch_failed;
+            result.native_error = static_cast<int>(process.error());
+            return result;
+        }
     }
     result.started = true;
-    result.finished = process.waitForFinished(-1);
+    while (!process.waitForFinished(100)) {
+        if (process.state() == QProcess::NotRunning) {
+            break;
+        }
+        if (!cancellation.stop_requested()) {
+            continue;
+        }
+
+        result.cancelled = true;
+        process.terminate();
+        if (!process.waitForFinished(2000)) {
+            process.kill();
+            process.waitForFinished(-1);
+        }
+        break;
+    }
+    result.finished = !result.cancelled && process.state() == QProcess::NotRunning
+                      && process.exitStatus() == QProcess::NormalExit;
     if (!result.finished) {
         result.error_message = "Could not collect the compact.exe process result: "
                                + process.errorString();
@@ -414,6 +445,13 @@ std::size_t compresso::CompressionReport::failedCount() const noexcept
     }));
 }
 
+std::size_t compresso::CompressionReport::cancelledCount() const noexcept
+{
+    return static_cast<std::size_t>(std::count_if(files.begin(), files.end(), [](const auto& file) {
+        return file.state == CompressionFileState::cancelled;
+    }));
+}
+
 namespace
 {
 
@@ -423,7 +461,7 @@ using ProcessRunner = CompressionBackend::ProcessRunner;
 
 compresso::CompressionReport runDirectoryOperation(
     const std::filesystem::path& directory, ProgressCallback progress,
-    ProcessRunner processRunner, bool restoring)
+    ProcessRunner processRunner, bool restoring, std::stop_token cancellation)
 {
     const auto startedAt = std::chrono::steady_clock::now();
     const auto elapsed = [&] {
@@ -563,11 +601,13 @@ compresso::CompressionReport runDirectoryOperation(
                 update.elapsed = elapsed();
                 progress(update);
             }
-        });
+        }, cancellation);
+    report.cancelled = scan.cancelled;
     report.issues = scan.errors;
     if (!processRunner) {
-        processRunner = [restoring](const auto& executable, const auto& file) {
-            return runCompact(executable, file, restoring);
+        processRunner = [restoring](const auto& executable, const auto& file,
+                                    std::stop_token processCancellation) {
+            return runCompact(executable, file, restoring, processCancellation);
         };
     }
     const std::size_t totalFiles = scan.files.size();
@@ -605,6 +645,11 @@ compresso::CompressionReport runDirectoryOperation(
 
     for (const auto& scannedFile : scan.files) {
         const std::filesystem::path filePath = scannedFile.path;
+        if (report.cancelled || cancellation.stop_requested()) {
+            report.cancelled = true;
+            appendResult(cancelledBeforeStart(filePath), scannedFile.logical_size_bytes);
+            continue;
+        }
         if (abortRemaining) {
             appendResult(aborted(filePath), scannedFile.logical_size_bytes);
             continue;
@@ -695,7 +740,19 @@ compresso::CompressionReport runDirectoryOperation(
             continue;
         }
 
-        const CompactProcessResult process = processRunner(compact, filePath);
+        const CompactProcessResult process = processRunner(compact, filePath, cancellation);
+        if (process.cancelled) {
+            report.cancelled = true;
+            CompressionFileResult result;
+            result.path = filePath;
+            result.state = CompressionFileState::cancelled;
+            result.exit_code = process.exit_code;
+            result.standard_output = process.standard_output;
+            result.standard_error = process.standard_error;
+            result.error_message = "compact.exe was stopped; this file's final state is unverified.";
+            appendResult(std::move(result), scannedFile.logical_size_bytes);
+            continue;
+        }
         if (!process.started) {
             CompressionFileResult result = failed(filePath, process.error_message);
             result.exit_code = process.exit_code;
@@ -805,10 +862,11 @@ compresso::CompressionReport runDirectoryOperation(
         appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
     }
 
-    if (!restoring) {
-        const ScanResult finalScan = DirectoryScanner::scan(canonicalDirectory);
+    if (!restoring && !report.cancelled) {
+        const ScanResult finalScan = DirectoryScanner::scan(canonicalDirectory, {}, cancellation);
+        report.cancelled = finalScan.cancelled;
         report.issues.insert(report.issues.end(), finalScan.errors.begin(), finalScan.errors.end());
-        if (scan.traversal_complete && scan.allocation_measurements_complete
+        if (!finalScan.cancelled && scan.traversal_complete && scan.allocation_measurements_complete
             && finalScan.traversal_complete && finalScan.allocation_measurements_complete) {
             report.size_summary = calculateCompressionSizeSummary(
                 scan.total_allocated_bytes, finalScan.total_allocated_bytes);
@@ -822,6 +880,14 @@ compresso::CompressionReport runDirectoryOperation(
             report.size_measurement_error = measurementError;
             report.issues.push_back(std::move(measurementError));
         }
+    } else if (!restoring && report.cancelled) {
+        OperationError measurementError;
+        measurementError.code = OperationErrorCode::unexpected_failure;
+        measurementError.path = canonicalDirectory;
+        measurementError.technical_details =
+            "Allocated size comparison was cancelled. Previously completed file changes remain.";
+        report.size_measurement_error = measurementError;
+        report.issues.push_back(std::move(measurementError));
     }
 
     return report;
@@ -831,14 +897,16 @@ compresso::CompressionReport runDirectoryOperation(
 
 compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
     const std::filesystem::path& directory, ProgressCallback progress,
-    ProcessRunner processRunner)
+    ProcessRunner processRunner, std::stop_token cancellation)
 {
-    return runDirectoryOperation(directory, std::move(progress), std::move(processRunner), false);
+    return runDirectoryOperation(directory, std::move(progress), std::move(processRunner), false,
+                                 cancellation);
 }
 
 compresso::CompressionReport compresso::CompressionBackend::restoreDirectory(
     const std::filesystem::path& directory, ProgressCallback progress,
-    ProcessRunner processRunner)
+    ProcessRunner processRunner, std::stop_token cancellation)
 {
-    return runDirectoryOperation(directory, std::move(progress), std::move(processRunner), true);
+    return runDirectoryOperation(directory, std::move(progress), std::move(processRunner), true,
+                                 cancellation);
 }

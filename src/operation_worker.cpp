@@ -5,8 +5,9 @@
 namespace compresso
 {
 
-OperationWorker::OperationWorker(Kind kind, std::filesystem::path directory)
-    : kind_(kind), directory_(std::move(directory))
+OperationWorker::OperationWorker(Kind kind, std::filesystem::path directory,
+                                 std::stop_token cancellation)
+    : kind_(kind), directory_(std::move(directory)), cancellation_(cancellation)
 {
 }
 
@@ -22,21 +23,21 @@ void OperationWorker::run()
                             QStringLiteral("Scanning directory… %1 files found")
                                 .arg(static_cast<qulonglong>(files)));
                     }
-                });
+                }, cancellation_);
             emit scanCompleted(std::move(result));
         } else if (kind_ == Kind::compress) {
             emit progressChanged(QStringLiteral("Preparing transparent NTFS LZX compression…"));
             CompressionReport result = CompressionBackend::compressDirectory(
                 directory_, [this](const CompressionProgress& progress) {
                     emit compressionProgress(progress);
-                });
+                }, {}, cancellation_);
             emit compressionCompleted(std::move(result));
         } else {
             emit progressChanged(QStringLiteral("Preparing transparent NTFS LZX restoration…"));
             CompressionReport result = CompressionBackend::restoreDirectory(
                 directory_, [this](const CompressionProgress& progress) {
                     emit compressionProgress(progress);
-                });
+                }, {}, cancellation_);
             emit restorationCompleted(std::move(result));
         }
     } catch (const std::exception& exception) {

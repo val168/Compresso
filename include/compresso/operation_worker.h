@@ -4,6 +4,7 @@
 #include "compresso/directory_scanner.h"
 
 #include <QObject>
+#include <stop_token>
 
 namespace compresso
 {
@@ -20,7 +21,8 @@ public:
         restore
     };
 
-    OperationWorker(Kind kind, std::filesystem::path directory);
+    OperationWorker(Kind kind, std::filesystem::path directory,
+                    std::stop_token cancellation);
 
 public slots:
     void run();
@@ -37,6 +39,7 @@ signals:
 private:
     Kind kind_;
     std::filesystem::path directory_;
+    std::stop_token cancellation_;
 };
 
 } // namespace compresso

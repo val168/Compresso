@@ -8,6 +8,7 @@
 #include <functional>
 #include <string>
 #include <system_error>
+#include <stop_token>
 #include <vector>
 
 namespace compresso
@@ -76,6 +77,7 @@ struct ScanResult
     std::uintmax_t total_allocated_bytes = 0;
     bool allocation_measurements_complete = true;
     bool traversal_complete = true;
+    bool cancelled = false;
     std::vector<OperationError> errors;
 };
 
@@ -86,7 +88,8 @@ public:
         std::function<void(std::size_t entries_visited, std::size_t files_found)>;
 
     [[nodiscard]] static ScanResult scan(const std::filesystem::path& root,
-                                         ProgressCallback progress = {});
+                                         ProgressCallback progress = {},
+                                         std::stop_token cancellation = {});
 };
 
 } // namespace compresso

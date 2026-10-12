@@ -145,7 +145,8 @@ bool getAllocatedSize(const std::filesystem::path& path, std::uintmax_t& size,
 } // namespace
 
 compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::path& root,
-                                                         ProgressCallback progress)
+                                                         ProgressCallback progress,
+                                                         std::stop_token cancellation)
 {
     ScanResult result;
     result.root = root;
@@ -192,7 +193,7 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
     }
 
     std::vector<std::filesystem::path> pendingDirectories{root};
-    while (!pendingDirectories.empty()) {
+    while (!pendingDirectories.empty() && !cancellation.stop_requested()) {
         std::filesystem::path directory = std::move(pendingDirectories.back());
         pendingDirectories.pop_back();
 
@@ -205,7 +206,7 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
             continue;
         }
 
-        while (iterator != end) {
+        while (iterator != end && !cancellation.stop_requested()) {
             ++entriesVisited;
             const std::filesystem::path entryPath = iterator->path();
             EntryMetadata metadata;
@@ -280,6 +281,16 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
                 reportProgress();
             }
         }
+        if (cancellation.stop_requested()) {
+            result.cancelled = true;
+            result.traversal_complete = false;
+            break;
+        }
+    }
+
+    if (cancellation.stop_requested()) {
+        result.cancelled = true;
+        result.traversal_complete = false;
     }
 
     result.total_file_count = result.files.size();

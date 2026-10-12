@@ -154,10 +154,15 @@ MainWindow::MainWindow(QWidget* parent)
     restoreButton_ = new QPushButton("Restore", content);
     restoreButton_->setObjectName("restoreButton");
     restoreButton_->setEnabled(false);
+    cancelButton_ = new QPushButton("Cancel", content);
+    cancelButton_->setObjectName("cancelButton");
+    cancelButton_->hide();
+    connect(cancelButton_, &QPushButton::clicked, this, [this] { cancelOperation(); });
 
     auto* actions = new QHBoxLayout;
     actions->setSpacing(8);
     actions->addStretch();
+    actions->addWidget(cancelButton_);
     actions->addWidget(analyzeButton_);
     actions->addWidget(compressButton_);
     actions->addWidget(restoreButton_);
@@ -213,6 +218,7 @@ MainWindow::~MainWindow()
     // This also covers application shutdown paths that bypass closeEvent (for example,
     // QApplication::quit()). A running worker is allowed to finish before its QThread dies.
     if (operationThread_ && operationThread_->isRunning()) {
+        operationStopSource_.request_stop();
         operationThread_->quit();
         operationThread_->wait();
     }
@@ -222,7 +228,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     if (operationThread_ && operationThread_->isRunning()) {
         closeAfterOperation_ = true;
-        statusBar()->showMessage("Finishing the current operation before closing…");
+        cancelOperation();
+        statusBar()->showMessage("Cancelling the current operation before closing…");
         event->ignore();
         return;
     }
@@ -236,6 +243,10 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
     }
 
     setOperationControlsEnabled(false);
+    operationStopSource_ = std::stop_source{};
+    cancelButton_->setEnabled(true);
+    cancelButton_->show();
+    activeOperationKind_ = kind;
     activeOperationIsRestore_ = kind == compresso::OperationWorker::Kind::restore;
     diagnosticLines_.clear();
     detailsButton_->hide();
@@ -243,18 +254,24 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
     progressBar_->show();
 
     auto* thread = new QThread(this);
-    auto* worker = new compresso::OperationWorker(kind,
-        std::filesystem::path(directory.toStdWString()));
+    auto* worker = new compresso::OperationWorker(
+        kind, std::filesystem::path(directory.toStdWString()), operationStopSource_.get_token());
     worker->moveToThread(thread);
 
     connect(thread, &QThread::started, worker, &compresso::OperationWorker::run);
     connect(worker, &compresso::OperationWorker::progressChanged, this,
-            [this](const QString& message) { statusBar()->showMessage(message); });
+            [this](const QString& message) {
+                if (!operationStopSource_.stop_requested()) {
+                    statusBar()->showMessage(message);
+                }
+            });
     connect(worker, &compresso::OperationWorker::compressionProgress, this,
             [this](const compresso::CompressionProgress& progress) {
                 latestCompressionProgress_ = progress;
                 hasCompressionProgress_ = true;
-                displayCompressionProgress(progress);
+                if (!operationStopSource_.stop_requested()) {
+                    displayCompressionProgress(progress);
+                }
             });
     connect(worker, &compresso::OperationWorker::errorOccurred, this,
             [this](const compresso::OperationError& error) {
@@ -290,6 +307,7 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
         progressTimer_->stop();
         hasCompressionProgress_ = false;
         setOperationControlsEnabled(true);
+        cancelButton_->hide();
         progressBar_->hide();
         if (closeAfterOperation_) {
             closeAfterOperation_ = false;
@@ -299,6 +317,20 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
 
     operationThread_ = thread;
     thread->start();
+}
+
+void MainWindow::cancelOperation()
+{
+    if (!operationThread_ || !operationThread_->isRunning()
+        || operationStopSource_.stop_requested()) {
+        return;
+    }
+
+    operationStopSource_.request_stop();
+    cancelButton_->setEnabled(false);
+    statusBar()->showMessage(activeOperationKind_ == compresso::OperationWorker::Kind::scan
+        ? QStringLiteral("Stopping directory scan…")
+        : QStringLiteral("Cancellation requested. Waiting for compact.exe to stop safely…"));
 }
 
 void MainWindow::displayCompressionProgress(const compresso::CompressionProgress& progress)
@@ -443,6 +475,23 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
         return;
     }
 
+    if (result.cancelled) {
+        originalSizeValue_->setText("\u2014");
+        compressedSizeValue_->setText("\u2014");
+        fileCountValue_->setText("\u2014");
+        filesystemValue_->setText("\u2014");
+        analyzedDirectoryIsEligible_ = false;
+        compressButton_->setEnabled(false);
+        restoreButton_->setEnabled(false);
+        diagnosticLines_.clear();
+        for (const auto& error : result.errors) {
+            diagnosticLines_.push_back(diagnosticText(error));
+        }
+        detailsButton_->setVisible(!diagnosticLines_.isEmpty());
+        statusBar()->showMessage("Scan cancelled; partial results were discarded.");
+        return;
+    }
+
     originalSizeLabel_->setText("Original size (logical)");
     compressedSizeLabel_->setText("Allocated size (on disk)");
     const QLocale locale;
@@ -565,6 +614,16 @@ void MainWindow::displayCompressionResult(const compresso::CompressionReport& re
     for (const auto& file : result.files) {
         if (file.state == compresso::CompressionFileState::failed && file.error) {
             diagnosticLines_.push_back(diagnosticText(*file.error));
+        } else if (file.state == compresso::CompressionFileState::cancelled) {
+            QString details = QStringLiteral("Cancelled during: ")
+                + QString::fromStdWString(file.path.native()) + "\n" + file.error_message;
+            if (!file.standard_output.isEmpty()) {
+                details += "\nstdout:\n" + QString::fromLocal8Bit(file.standard_output);
+            }
+            if (!file.standard_error.isEmpty()) {
+                details += "\nstderr:\n" + QString::fromLocal8Bit(file.standard_error);
+            }
+            diagnosticLines_.push_back(std::move(details));
         } else if (file.state == compresso::CompressionFileState::skipped) {
             diagnosticLines_.push_back(file.error ? diagnosticText(*file.error)
                                                   : skippedFileText(file));
@@ -595,6 +654,12 @@ void MainWindow::displayCompressionResult(const compresso::CompressionReport& re
         + locale.toString(static_cast<qulonglong>(result.compressedCount())) + " compressed, "
         + locale.toString(static_cast<qulonglong>(result.skippedCount())) + " skipped, "
         + locale.toString(static_cast<qulonglong>(result.failedCount())) + " failed. ";
+    if (result.cancelled) {
+        message = "LZX cancelled: "
+            + locale.toString(static_cast<qulonglong>(result.compressedCount())) + " compressed, "
+            + locale.toString(static_cast<qulonglong>(result.skippedCount())) + " skipped, "
+            + locale.toString(static_cast<qulonglong>(result.failedCount())) + " failed. ";
+    }
     if (result.size_summary) {
         const auto& summary = *result.size_summary;
         if (summary.bytes_increased > 0) {
@@ -618,6 +683,11 @@ void MainWindow::displayCompressionResult(const compresso::CompressionReport& re
         message += "Allocated size unavailable (scan incomplete)";
     }
     message += ".";
+    if (result.cancelled) {
+        message += result.cancelledCount() > 0
+            ? " Completed file changes were kept; the active file's state is unverified."
+            : " Completed file changes were kept.";
+    }
     if (!diagnosticLines_.isEmpty()) message += " See Details.";
     statusBar()->showMessage(message);
 }
@@ -654,6 +724,16 @@ void MainWindow::displayRestoreResult(const compresso::CompressionReport& result
     for (const auto& file : result.files) {
         if (file.state == compresso::CompressionFileState::failed && file.error) {
             diagnosticLines_.push_back(diagnosticText(*file.error));
+        } else if (file.state == compresso::CompressionFileState::cancelled) {
+            QString details = QStringLiteral("Cancelled during: ")
+                + QString::fromStdWString(file.path.native()) + "\n" + file.error_message;
+            if (!file.standard_output.isEmpty()) {
+                details += "\nstdout:\n" + QString::fromLocal8Bit(file.standard_output);
+            }
+            if (!file.standard_error.isEmpty()) {
+                details += "\nstderr:\n" + QString::fromLocal8Bit(file.standard_error);
+            }
+            diagnosticLines_.push_back(std::move(details));
         } else if (file.state == compresso::CompressionFileState::skipped) {
             diagnosticLines_.push_back(file.error ? diagnosticText(*file.error)
                                                   : skippedFileText(file));
@@ -661,8 +741,10 @@ void MainWindow::displayRestoreResult(const compresso::CompressionReport& result
     }
     detailsButton_->setVisible(!diagnosticLines_.isEmpty());
 
-    QString message = "Restore: "
-        + locale.toString(static_cast<qulonglong>(result.restoredCount())) + " restored";
+    QString message = result.cancelled ? "Restore cancelled: " : "Restore: ";
+    message += locale.toString(static_cast<qulonglong>(result.restoredCount())) + " restored, "
+        + locale.toString(static_cast<qulonglong>(result.skippedCount())) + " skipped, "
+        + locale.toString(static_cast<qulonglong>(result.failedCount())) + " failed";
     if (result.skippedCount() > 0) {
         message += ", " + locale.toString(static_cast<qulonglong>(result.skippedCount()))
                    + " skipped";
@@ -686,7 +768,13 @@ void MainWindow::displayRestoreResult(const compresso::CompressionReport& result
             message += ". " + firstFailure->error_message;
         }
     }
-    message += ". Analyze again to refresh allocated size.";
+    if (result.cancelled) {
+        message += result.cancelledCount() > 0
+            ? ". Completed restorations were kept; the active file's state is unverified."
+            : ". Completed restorations were kept.";
+    } else {
+        message += ". Analyze again to refresh allocated size.";
+    }
     if (!diagnosticLines_.isEmpty()) message += " See Details.";
     statusBar()->showMessage(message);
 }

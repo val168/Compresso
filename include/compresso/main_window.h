@@ -8,6 +8,7 @@
 #include <QElapsedTimer>
 #include <QString>
 #include <QStringList>
+#include <stop_token>
 
 class QLineEdit;
 class QLabel;
@@ -28,6 +29,7 @@ protected:
 
 private:
     void startOperation(compresso::OperationWorker::Kind kind, const QString& directory);
+    void cancelOperation();
     void setOperationControlsEnabled(bool enabled);
     void browseForDirectory();
     void handleDirectoryTextChanged();
@@ -55,6 +57,7 @@ private:
     QPushButton* compressButton_ = nullptr;
     QPushButton* restoreButton_ = nullptr;
     QPushButton* detailsButton_ = nullptr;
+    QPushButton* cancelButton_ = nullptr;
     QProgressBar* progressBar_ = nullptr;
     QTimer* progressTimer_ = nullptr;
     QElapsedTimer compressionClock_;
@@ -64,6 +67,8 @@ private:
     QString validatedDirectory_;
     bool closeAfterOperation_ = false;
     bool analyzedDirectoryIsEligible_ = false;
+    compresso::OperationWorker::Kind activeOperationKind_ = compresso::OperationWorker::Kind::scan;
     bool activeOperationIsRestore_ = false;
+    std::stop_source operationStopSource_;
     QStringList diagnosticLines_;
 };
