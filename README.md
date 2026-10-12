@@ -2,7 +2,7 @@
 
 Compresso is a Windows-only desktop utility for applying native transparent NTFS LZX compression to game folders. Compressed files remain in place and games remain directly accessible; no archive or extraction workflow is involved.
 
-The current application is an initial Qt Widgets shell. Compression is **not implemented yet**.
+The current Qt Widgets interface supports selecting a game directory with the Windows folder picker or entering its path manually. It validates that the directory exists and is readable. Compression and size analysis are **not implemented yet**.
 
 ## Requirements
 
@@ -21,6 +21,7 @@ The included presets use Ninja and select GCC from `PATH`.
 ```powershell
 cmake --preset debug
 cmake --build --preset debug
+ctest --test-dir out/build/debug --output-on-failure
 ```
 
 For an optimized build:
@@ -36,7 +37,7 @@ Run `out/build/debug/Compresso.exe`. Ensure the Qt 6 and MinGW runtime `bin` dir
 
 - `src/` — application implementation
 - `include/` — public project headers
-- `tests/` — future automated checks
+- `tests/` — automated UI and directory validation checks
 - `docs/` — design and implementation notes
 - `resources/` — application resources
 
