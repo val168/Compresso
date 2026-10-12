@@ -1,0 +1,27 @@
+# CMake and Ninja output
+/out/
+/build/
+/cmake-build-*/
+CMakeUserPresets.json
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+build.ninja
+Makefile
+
+# IDE and editor files
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# Windows build artifacts
+*.exe
+*.dll
+*.obj
+*.o
+*.a
+*.lib
+*.pdb
+*.ilk
