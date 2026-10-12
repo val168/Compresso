@@ -30,3 +30,22 @@ target_link_libraries(Compresso PRIVATE Qt6::Widgets)
 target_compile_features(Compresso PRIVATE cxx_std_23)
 
 install(TARGETS Compresso RUNTIME DESTINATION .)
+
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Test)
+
+    add_executable(CompressoUiTests
+        tests/ui_tests.cpp
+        src/main_window.cpp
+        include/compresso/main_window.h
+    )
+    target_include_directories(CompressoUiTests PRIVATE include)
+    target_link_libraries(CompressoUiTests PRIVATE Qt6::Widgets Qt6::Test)
+    target_compile_features(CompressoUiTests PRIVATE cxx_std_23)
+
+    add_test(NAME CompressoUiTests COMMAND CompressoUiTests)
+    set_tests_properties(CompressoUiTests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+endif()
