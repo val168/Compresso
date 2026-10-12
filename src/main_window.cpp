@@ -4,6 +4,9 @@
 #include "compresso/operation_worker.h"
 
 #include <QCloseEvent>
+#include <QAction>
+#include <QActionGroup>
+#include <QApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -16,6 +19,7 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QMessageBox>
+#include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QStatusBar>
 #include <QThread>
@@ -83,6 +87,11 @@ QString skippedFileText(const compresso::CompressionFileResult& file)
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
+    themeManager_ = new compresso::ThemeManager(
+        *qobject_cast<QApplication*>(QApplication::instance()), this);
+    setPalette(qApp->palette());
+    connect(themeManager_, &compresso::ThemeManager::paletteApplied,
+            this, [this](const QPalette& palette) { setPalette(palette); });
     qRegisterMetaType<compresso::ScanResult>("compresso::ScanResult");
     qRegisterMetaType<compresso::CompressionReport>("compresso::CompressionReport");
     qRegisterMetaType<compresso::CompressionProgress>("compresso::CompressionProgress");
@@ -91,6 +100,35 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle("Compresso");
     setMinimumWidth(420);
     resize(520, 270);
+
+    auto* appearanceMenu = menuBar()->addMenu(tr("Appearance"));
+    auto* themeActions = new QActionGroup(this);
+    themeActions->setExclusive(true);
+    const auto addThemeAction = [this, appearanceMenu, themeActions](const QString& text,
+                                                                     const char* name,
+                                                                     compresso::ThemePreference preference) {
+        auto* action = appearanceMenu->addAction(text);
+        action->setObjectName(QString::fromLatin1(name));
+        action->setCheckable(true);
+        themeActions->addAction(action);
+        connect(action, &QAction::triggered, this,
+                [this, preference] { themeManager_->setPreference(preference); });
+        return action;
+    };
+    systemThemeAction_ = addThemeAction(tr("System"), "themeSystemAction",
+                                        compresso::ThemePreference::system);
+    lightThemeAction_ = addThemeAction(tr("Light"), "themeLightAction",
+                                       compresso::ThemePreference::light);
+    darkThemeAction_ = addThemeAction(tr("Dark"), "themeDarkAction",
+                                      compresso::ThemePreference::dark);
+    const auto updateThemeChecks = [this](compresso::ThemePreference preference) {
+        systemThemeAction_->setChecked(preference == compresso::ThemePreference::system);
+        lightThemeAction_->setChecked(preference == compresso::ThemePreference::light);
+        darkThemeAction_->setChecked(preference == compresso::ThemePreference::dark);
+    };
+    updateThemeChecks(themeManager_->preference());
+    connect(themeManager_, &compresso::ThemeManager::preferenceChanged,
+            this, updateThemeChecks);
 
     auto* content = new QWidget(this);
     content->setObjectName("mainContent");

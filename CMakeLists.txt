@@ -27,6 +27,7 @@ add_executable(Compresso WIN32
     src/directory_validator.cpp
     src/directory_scanner.cpp
     src/operation_worker.cpp
+    src/theme_manager.cpp
     src/main_window.cpp
     include/compresso/directory_validator.h
     include/compresso/operation_error.h
@@ -34,6 +35,7 @@ add_executable(Compresso WIN32
     include/compresso/compression_backend.h
     include/compresso/directory_scanner.h
     include/compresso/operation_worker.h
+    include/compresso/theme_manager.h
     include/compresso/main_window.h
 )
 
@@ -55,6 +57,7 @@ if(BUILD_TESTING)
         src/directory_validator.cpp
         src/directory_scanner.cpp
         src/operation_worker.cpp
+        src/theme_manager.cpp
         src/main_window.cpp
         include/compresso/directory_validator.h
         include/compresso/operation_error.h
@@ -62,6 +65,7 @@ if(BUILD_TESTING)
         include/compresso/compression_backend.h
         include/compresso/directory_scanner.h
         include/compresso/operation_worker.h
+        include/compresso/theme_manager.h
         include/compresso/main_window.h
     )
     target_include_directories(CompressoUiTests PRIVATE include)

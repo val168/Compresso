@@ -3,6 +3,7 @@
 #include "compresso/compression_backend.h"
 #include "compresso/directory_scanner.h"
 #include "compresso/operation_worker.h"
+#include "compresso/theme_manager.h"
 
 #include <QMainWindow>
 #include <QElapsedTimer>
@@ -11,6 +12,7 @@
 #include <stop_token>
 
 class QLineEdit;
+class QAction;
 class QLabel;
 class QPushButton;
 class QThread;
@@ -71,4 +73,8 @@ private:
     bool activeOperationIsRestore_ = false;
     std::stop_source operationStopSource_;
     QStringList diagnosticLines_;
+    compresso::ThemeManager* themeManager_ = nullptr;
+    QAction* systemThemeAction_ = nullptr;
+    QAction* lightThemeAction_ = nullptr;
+    QAction* darkThemeAction_ = nullptr;
 };

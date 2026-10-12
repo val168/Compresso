@@ -4,6 +4,8 @@
 #include "compresso/compression_backend.h"
 
 #include <QDir>
+#include <QAction>
+#include <QApplication>
 #include <QDialog>
 #include <QFile>
 #include <QLabel>
@@ -15,6 +17,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QStatusBar>
+#include <QScreen>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QtTest>
@@ -110,6 +113,51 @@ private slots:
         QCOMPARE(originalSize->text(), QStringLiteral("—"));
         QCOMPARE(compressedSize->text(), QStringLiteral("—"));
         QCOMPARE(method->text(), QStringLiteral("LZX"));
+    }
+
+    void supportsManualLightAndDarkThemes()
+    {
+        MainWindow window;
+        auto* light = window.findChild<QAction*>("themeLightAction");
+        auto* dark = window.findChild<QAction*>("themeDarkAction");
+        auto* system = window.findChild<QAction*>("themeSystemAction");
+        auto* path = window.findChild<QLineEdit*>("gameDirectoryPath");
+        auto* progress = window.findChild<QProgressBar*>("operationProgress");
+        QVERIFY(light);
+        QVERIFY(dark);
+        QVERIFY(system);
+        QVERIFY(path);
+        QVERIFY(progress);
+
+        dark->trigger();
+        QVERIFY(dark->isChecked());
+        QVERIFY(qApp->palette().color(QPalette::Base).lightness()
+                < qApp->palette().color(QPalette::Text).lightness());
+        QCOMPARE(path->palette().color(QPalette::Base),
+                 qApp->palette().color(QPalette::Base));
+        QCOMPARE(progress->palette().color(QPalette::Window),
+                 qApp->palette().color(QPalette::Window));
+
+        light->trigger();
+        QVERIFY(light->isChecked());
+        QVERIFY(qApp->palette().color(QPalette::Base).lightness()
+                > qApp->palette().color(QPalette::Text).lightness());
+        system->trigger();
+        QVERIFY(system->isChecked());
+    }
+
+    void widgetsRespectHighDpiScale()
+    {
+        MainWindow window;
+        QVERIFY(window.devicePixelRatioF() >= 1.0);
+        const QByteArray configuredScale = qgetenv("QT_SCALE_FACTOR");
+        if (!configuredScale.isEmpty()) {
+            const qreal expectedScale = configuredScale.toDouble();
+            QVERIFY(qAbs(window.devicePixelRatioF() - expectedScale) < 0.01);
+        }
+        if (qApp->primaryScreen() != nullptr) {
+            QVERIFY(qApp->primaryScreen()->devicePixelRatio() >= 1.0);
+        }
     }
 
     void enablesAnalysisOnlyAfterDirectorySelection()
