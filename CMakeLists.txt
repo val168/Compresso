@@ -21,7 +21,9 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets)
 
 add_executable(Compresso WIN32
     src/main.cpp
+    src/directory_validator.cpp
     src/main_window.cpp
+    include/compresso/directory_validator.h
     include/compresso/main_window.h
 )
 
@@ -37,7 +39,9 @@ if(BUILD_TESTING)
 
     add_executable(CompressoUiTests
         tests/ui_tests.cpp
+        src/directory_validator.cpp
         src/main_window.cpp
+        include/compresso/directory_validator.h
         include/compresso/main_window.h
     )
     target_include_directories(CompressoUiTests PRIVATE include)

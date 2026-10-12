@@ -1,4 +1,5 @@
 #include "compresso/main_window.h"
+#include "compresso/directory_validator.h"
 
 #include <QFileDialog>
 #include <QFrame>
@@ -56,10 +57,11 @@ MainWindow::MainWindow(QWidget* parent)
         value->setObjectName(QString::fromLatin1(valueObjectName));
         details->addWidget(label, row, 0);
         details->addWidget(value, row, 1, Qt::AlignLeft);
+        return value;
     };
 
-    addDetail(0, "Original size", "—", "originalSizeValue");
-    addDetail(1, "Compressed size", "—", "compressedSizeValue");
+    originalSizeValue_ = addDetail(0, "Original size", "—", "originalSizeValue");
+    compressedSizeValue_ = addDetail(1, "Compressed size", "—", "compressedSizeValue");
     addDetail(2, "Compression method", "LZX", "compressionMethodValue");
 
     auto* analyzeButton = new QPushButton("Analyze", content);
@@ -90,6 +92,11 @@ MainWindow::MainWindow(QWidget* parent)
 
     statusBar()->setObjectName("operationStatus");
     statusBar()->showMessage("Select a game directory to get started.");
+
+    connect(directoryPath_, &QLineEdit::textChanged, this,
+            [this] { handleDirectoryTextChanged(); });
+    connect(directoryPath_, &QLineEdit::editingFinished, this,
+            [this] { validateDirectoryPath(); });
 }
 
 void MainWindow::browseForDirectory()
@@ -102,5 +109,32 @@ void MainWindow::browseForDirectory()
     }
 
     directoryPath_->setText(selectedDirectory);
-    statusBar()->showMessage("Directory selected. Analysis is not available yet.");
+    validateDirectoryPath();
+}
+
+void MainWindow::handleDirectoryTextChanged()
+{
+    validatedDirectory_.clear();
+    originalSizeValue_->setText("—");
+    compressedSizeValue_->setText("—");
+
+    if (directoryPath_->text().isEmpty()) {
+        statusBar()->showMessage("Select a game directory to get started.");
+    } else {
+        statusBar()->showMessage("Directory changed. Press Enter to validate.");
+    }
+}
+
+void MainWindow::validateDirectoryPath()
+{
+    const QString path = directoryPath_->text();
+    const QString error = compresso::directoryValidationError(path);
+    if (!error.isEmpty()) {
+        validatedDirectory_.clear();
+        statusBar()->showMessage(error);
+        return;
+    }
+
+    validatedDirectory_ = path;
+    statusBar()->showMessage("Directory is ready. Compression is not implemented.");
 }
