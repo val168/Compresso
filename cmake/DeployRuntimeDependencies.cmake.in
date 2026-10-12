@@ -1,0 +1,92 @@
+set(COMPRESSO_OBJDUMP [==[@COMPRESSO_OBJDUMP@]==])
+set(COMPRESSO_RUNTIME_SEARCH_DIRS
+    [==[@COMPRESSO_COMPILER_BIN@]==]
+    [==[@COMPRESSO_QT_BIN@]==]
+)
+file(TO_CMAKE_PATH "$ENV{WINDIR}/System32" COMPRESSO_SYSTEM_DLL_DIRECTORY)
+
+file(GLOB_RECURSE COMPRESSO_DEPLOYED_DLLS
+    LIST_DIRECTORIES FALSE
+    "${CMAKE_INSTALL_PREFIX}/*.dll"
+)
+set(COMPRESSO_PENDING_BINARIES
+    "${CMAKE_INSTALL_PREFIX}/bin/Compresso.exe"
+    ${COMPRESSO_DEPLOYED_DLLS}
+)
+set(COMPRESSO_SCANNED_BINARIES)
+
+while(COMPRESSO_PENDING_BINARIES)
+    list(POP_FRONT COMPRESSO_PENDING_BINARIES COMPRESSO_BINARY)
+    cmake_path(NORMAL_PATH COMPRESSO_BINARY)
+    if(COMPRESSO_BINARY IN_LIST COMPRESSO_SCANNED_BINARIES)
+        continue()
+    endif()
+    list(APPEND COMPRESSO_SCANNED_BINARIES "${COMPRESSO_BINARY}")
+
+    execute_process(
+        COMMAND "${COMPRESSO_OBJDUMP}" -p "${COMPRESSO_BINARY}"
+        RESULT_VARIABLE COMPRESSO_OBJDUMP_RESULT
+        OUTPUT_VARIABLE COMPRESSO_BINARY_IMPORTS
+        ERROR_VARIABLE COMPRESSO_OBJDUMP_ERROR
+    )
+    if(NOT COMPRESSO_OBJDUMP_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "Could not inspect portable runtime dependencies for ${COMPRESSO_BINARY}:\n"
+            "${COMPRESSO_OBJDUMP_ERROR}"
+        )
+    endif()
+
+    string(REGEX MATCHALL "DLL Name: [^\r\n]+" COMPRESSO_IMPORT_LINES
+        "${COMPRESSO_BINARY_IMPORTS}")
+    foreach(COMPRESSO_IMPORT_LINE IN LISTS COMPRESSO_IMPORT_LINES)
+        string(REGEX REPLACE "^DLL Name: *" "" COMPRESSO_IMPORT_NAME
+            "${COMPRESSO_IMPORT_LINE}")
+        string(TOLOWER "${COMPRESSO_IMPORT_NAME}" COMPRESSO_IMPORT_LOWER)
+
+        # Windows API-set contracts are supplied by Windows and have no file
+        # that should be copied into the portable application.
+        if(COMPRESSO_IMPORT_LOWER MATCHES "^(api-ms-|ext-ms-)")
+            continue()
+        endif()
+
+        cmake_path(GET COMPRESSO_BINARY PARENT_PATH COMPRESSO_BINARY_DIRECTORY)
+        set(COMPRESSO_RESOLVED_IMPORT)
+        foreach(COMPRESSO_SEARCH_DIRECTORY IN ITEMS
+                "${COMPRESSO_BINARY_DIRECTORY}"
+                "${CMAKE_INSTALL_PREFIX}/bin"
+                ${COMPRESSO_RUNTIME_SEARCH_DIRS}
+                "${COMPRESSO_SYSTEM_DLL_DIRECTORY}")
+            if(EXISTS "${COMPRESSO_SEARCH_DIRECTORY}/${COMPRESSO_IMPORT_NAME}")
+                set(COMPRESSO_RESOLVED_IMPORT
+                    "${COMPRESSO_SEARCH_DIRECTORY}/${COMPRESSO_IMPORT_NAME}")
+                break()
+            endif()
+        endforeach()
+
+        if(NOT COMPRESSO_RESOLVED_IMPORT)
+            message(FATAL_ERROR
+                "Portable runtime dependency '${COMPRESSO_IMPORT_NAME}' imported by "
+                "${COMPRESSO_BINARY} was not found in the Qt, compiler, package, or Windows directories."
+            )
+        endif()
+
+        cmake_path(NORMAL_PATH COMPRESSO_RESOLVED_IMPORT)
+        cmake_path(IS_PREFIX COMPRESSO_SYSTEM_DLL_DIRECTORY
+            "${COMPRESSO_RESOLVED_IMPORT}" NORMALIZE COMPRESSO_IMPORT_IS_SYSTEM)
+        if(COMPRESSO_IMPORT_IS_SYSTEM)
+            continue()
+        endif()
+
+        cmake_path(IS_PREFIX CMAKE_INSTALL_PREFIX
+            "${COMPRESSO_RESOLVED_IMPORT}" NORMALIZE COMPRESSO_IMPORT_IS_PACKAGED)
+        if(NOT COMPRESSO_IMPORT_IS_PACKAGED)
+            file(COPY_FILE "${COMPRESSO_RESOLVED_IMPORT}"
+                "${CMAKE_INSTALL_PREFIX}/bin/${COMPRESSO_IMPORT_NAME}"
+                ONLY_IF_DIFFERENT
+            )
+            set(COMPRESSO_RESOLVED_IMPORT
+                "${CMAKE_INSTALL_PREFIX}/bin/${COMPRESSO_IMPORT_NAME}")
+        endif()
+        list(APPEND COMPRESSO_PENDING_BINARIES "${COMPRESSO_RESOLVED_IMPORT}")
+    endforeach()
+endwhile()

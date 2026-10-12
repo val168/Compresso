@@ -43,3 +43,41 @@ jobs:
       - name: Run ${{ matrix.preset }} tests
         shell: msys2 {0}
         run: ctest --test-dir out/build/${{ matrix.preset }} --output-on-failure
+
+      - name: Package portable Release
+        if: matrix.preset == 'release'
+        shell: msys2 {0}
+        run: cmake --build --preset release --target package-portable
+
+      - name: Smoke-test portable ZIP without Qt or MSYS2 on PATH
+        if: matrix.preset == 'release'
+        shell: pwsh
+        run: |
+          $testRoot = Join-Path $env:RUNNER_TEMP ("Compresso-portable-" + [guid]::NewGuid())
+          Expand-Archive -LiteralPath (Get-ChildItem 'out/build/release/portable/*.zip' | Select-Object -First 1).FullName -DestinationPath $testRoot
+          $application = Join-Path $testRoot 'Compresso/bin/Compresso.exe'
+          if (-not (Test-Path -LiteralPath $application -PathType Leaf)) {
+            throw 'Compresso.exe was not present in the portable ZIP.'
+          }
+          $env:PATH = "$env:WINDIR\System32;$env:WINDIR"
+          $process = Start-Process -FilePath $application -PassThru
+          try {
+            if (-not $process.WaitForInputIdle(15000) -or $process.HasExited) {
+              throw 'Packaged Compresso did not reach its GUI message loop.'
+            }
+            if (-not $process.CloseMainWindow() -or -not $process.WaitForExit(5000)) {
+              throw 'Packaged Compresso did not close cleanly after the smoke test.'
+            }
+          }
+          finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+
+      - name: Upload portable Release ZIP
+        if: matrix.preset == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Compresso-portable-windows-x64
+          path: out/build/release/portable/*.zip
+          if-no-files-found: error
+          retention-days: 30

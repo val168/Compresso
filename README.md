@@ -45,6 +45,15 @@ cmake --preset release
 cmake --build --preset release
 ```
 
+Create a portable Release folder and ZIP with Qt and MinGW runtime dependencies deployed beside the application:
+
+```powershell
+cmake --preset release
+cmake --build --preset release --target package-portable
+```
+
+The result is `out/build/release/portable/Compresso-0.1.0-windows-x64.zip`. Extract it and run `Compresso/bin/Compresso.exe`; the archive contains the Qt runtime and plugins, so a separate Qt installation is not required. Ordinary use does not require administrator privileges. The release GitHub Actions job smoke-tests the extracted ZIP with Qt and MSYS2 removed from `PATH`, then uploads it as the `Compresso-portable-windows-x64` workflow artifact.
+
 Run `out/build/debug/Compresso.exe`. Ensure the Qt 6 and MinGW runtime `bin` directories are on `PATH` when launching from a terminal.
 
 ## Project layout
