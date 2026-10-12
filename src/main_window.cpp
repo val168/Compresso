@@ -12,16 +12,22 @@
 #include <QLocale>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QStatusBar>
 #include <QThread>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <array>
+#include <chrono>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     qRegisterMetaType<compresso::ScanResult>("compresso::ScanResult");
     qRegisterMetaType<compresso::CompressionReport>("compresso::CompressionReport");
+    qRegisterMetaType<compresso::CompressionProgress>("compresso::CompressionProgress");
 
     setWindowTitle("Compresso");
     setMinimumWidth(420);
@@ -102,6 +108,24 @@ MainWindow::MainWindow(QWidget* parent)
 
     statusBar()->setObjectName("operationStatus");
     statusBar()->showMessage("Select a game directory to get started.");
+    progressBar_ = new QProgressBar(statusBar());
+    progressBar_->setObjectName("operationProgress");
+    progressBar_->setRange(0, 0);
+    progressBar_->setFixedWidth(150);
+    progressBar_->setMaximumHeight(16);
+    progressBar_->setTextVisible(true);
+    progressBar_->setFormat("%p%");
+    progressBar_->hide();
+    statusBar()->addPermanentWidget(progressBar_);
+    progressTimer_ = new QTimer(this);
+    progressTimer_->setInterval(1000);
+    connect(progressTimer_, &QTimer::timeout, this, [this] {
+        if (hasCompressionProgress_ && operationThread_ && operationThread_->isRunning()) {
+            compresso::CompressionProgress progress = latestCompressionProgress_;
+            progress.elapsed = std::chrono::milliseconds(compressionClock_.elapsed());
+            displayCompressionProgress(progress);
+        }
+    });
 
     connect(directoryPath_, &QLineEdit::textChanged, this,
             [this] { handleDirectoryTextChanged(); });
@@ -141,6 +165,8 @@ void MainWindow::startOperation(bool compressing, const QString& directory)
     }
 
     setOperationControlsEnabled(false);
+    progressBar_->setRange(0, 0);
+    progressBar_->show();
 
     auto* thread = new QThread(this);
     auto* worker = new compresso::OperationWorker(
@@ -152,6 +178,12 @@ void MainWindow::startOperation(bool compressing, const QString& directory)
     connect(thread, &QThread::started, worker, &compresso::OperationWorker::run);
     connect(worker, &compresso::OperationWorker::progressChanged, this,
             [this](const QString& message) { statusBar()->showMessage(message); });
+    connect(worker, &compresso::OperationWorker::compressionProgress, this,
+            [this](const compresso::CompressionProgress& progress) {
+                latestCompressionProgress_ = progress;
+                hasCompressionProgress_ = true;
+                displayCompressionProgress(progress);
+            });
     connect(worker, &compresso::OperationWorker::errorOccurred, this,
             [this](const QString& message) {
                 analyzedDirectoryIsEligible_ = false;
@@ -164,6 +196,7 @@ void MainWindow::startOperation(bool compressing, const QString& directory)
             });
     connect(worker, &compresso::OperationWorker::compressionCompleted, this,
             [this, directory](const compresso::CompressionReport& result) {
+                progressTimer_->stop();
                 displayCompressionResult(result, directory);
             });
     connect(worker, &compresso::OperationWorker::finished, thread, &QThread::quit);
@@ -173,7 +206,10 @@ void MainWindow::startOperation(bool compressing, const QString& directory)
             operationThread_ = nullptr;
         }
         thread->deleteLater();
+        progressTimer_->stop();
+        hasCompressionProgress_ = false;
         setOperationControlsEnabled(true);
+        progressBar_->hide();
         if (closeAfterOperation_) {
             closeAfterOperation_ = false;
             QMetaObject::invokeMethod(this, &QWidget::close, Qt::QueuedConnection);
@@ -182,6 +218,58 @@ void MainWindow::startOperation(bool compressing, const QString& directory)
 
     operationThread_ = thread;
     thread->start();
+}
+
+void MainWindow::displayCompressionProgress(const compresso::CompressionProgress& progress)
+{
+    if (!progress.totals_known || progress.total_files == 0) {
+        progressBar_->setRange(0, 0);
+    } else {
+        constexpr int progressScale = 1000;
+        progressBar_->setRange(0, progressScale);
+        const long double fraction = static_cast<long double>(progress.completed_files)
+                                     / static_cast<long double>(progress.total_files);
+        progressBar_->setValue(static_cast<int>(fraction * progressScale));
+    }
+
+    const auto formatBytes = [](std::uintmax_t bytes) {
+        constexpr std::array<const char*, 5> units{"B", "KiB", "MiB", "GiB", "TiB"};
+        long double value = static_cast<long double>(bytes);
+        std::size_t unit = 0;
+        while (value >= 1024.0L && unit + 1 < units.size()) {
+            value /= 1024.0L;
+            ++unit;
+        }
+        return QStringLiteral("%1 %2").arg(static_cast<double>(value), 0, 'f', unit == 0 ? 0 : 1)
+            .arg(QString::fromLatin1(units[unit]));
+    };
+    const auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+        progress.elapsed).count();
+    const auto elapsedMinutes = elapsedSeconds / 60;
+    const QString elapsed = elapsedSeconds >= 3600
+        ? QStringLiteral("%1:%2:%3")
+              .arg(elapsedSeconds / 3600)
+              .arg(elapsedMinutes % 60, 2, 10, QLatin1Char('0'))
+              .arg(elapsedSeconds % 60, 2, 10, QLatin1Char('0'))
+        : QStringLiteral("%1:%2")
+              .arg(elapsedMinutes, 2, 10, QLatin1Char('0'))
+              .arg(elapsedSeconds % 60, 2, 10, QLatin1Char('0'));
+    QString message;
+    if (!progress.totals_known) {
+        message = QStringLiteral("Scanning compression targets…");
+    } else {
+        message = QStringLiteral("LZX %1/%2 files | logical %3 / %4 | elapsed %5")
+            .arg(static_cast<qulonglong>(progress.completed_files))
+            .arg(static_cast<qulonglong>(progress.total_files))
+            .arg(formatBytes(progress.processed_logical_bytes),
+                 formatBytes(progress.total_logical_bytes))
+            .arg(elapsed);
+        if (!progress.current_file.empty()) {
+            message += QStringLiteral(" | ")
+                       + QString::fromStdWString(progress.current_file.filename().native());
+        }
+    }
+    statusBar()->showMessage(message);
 }
 
 void MainWindow::setOperationControlsEnabled(bool enabled)
@@ -309,6 +397,9 @@ void MainWindow::startCompression()
         return;
     }
     analyzedDirectoryIsEligible_ = false;
+    compressionClock_.start();
+    hasCompressionProgress_ = false;
+    progressTimer_->start();
     startOperation(true, validatedDirectory_);
 }
 

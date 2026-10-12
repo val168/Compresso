@@ -4,6 +4,7 @@
 #include "compresso/directory_scanner.h"
 
 #include <QMainWindow>
+#include <QElapsedTimer>
 #include <QString>
 
 class QLineEdit;
@@ -11,6 +12,8 @@ class QLabel;
 class QPushButton;
 class QThread;
 class QCloseEvent;
+class QProgressBar;
+class QTimer;
 
 class MainWindow final : public QMainWindow
 {
@@ -32,6 +35,7 @@ private:
     void startCompression();
     void displayCompressionResult(const compresso::CompressionReport& result,
                                   const QString& directory);
+    void displayCompressionProgress(const compresso::CompressionProgress& progress);
 
     QLineEdit* directoryPath_ = nullptr;
     QLabel* originalSizeValue_ = nullptr;
@@ -41,6 +45,11 @@ private:
     QPushButton* browseButton_ = nullptr;
     QPushButton* analyzeButton_ = nullptr;
     QPushButton* compressButton_ = nullptr;
+    QProgressBar* progressBar_ = nullptr;
+    QTimer* progressTimer_ = nullptr;
+    QElapsedTimer compressionClock_;
+    compresso::CompressionProgress latestCompressionProgress_;
+    bool hasCompressionProgress_ = false;
     QThread* operationThread_ = nullptr;
     QString validatedDirectory_;
     bool closeAfterOperation_ = false;

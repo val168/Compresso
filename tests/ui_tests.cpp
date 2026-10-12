@@ -9,6 +9,7 @@
 #include <QLineEdit>
 #include <QLocale>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -17,6 +18,8 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <thread>
+#include <vector>
 
 #include <Windows.h>
 #include <winioctl.h>
@@ -93,9 +96,12 @@ private slots:
         const auto* originalSize = window.findChild<QLabel*>("originalSizeValue");
         const auto* compressedSize = window.findChild<QLabel*>("compressedSizeValue");
         const auto* method = window.findChild<QLabel*>("compressionMethodValue");
+        const auto* progress = window.findChild<QProgressBar*>("operationProgress");
         QVERIFY(originalSize);
         QVERIFY(compressedSize);
         QVERIFY(method);
+        QVERIFY(progress);
+        QVERIFY(progress->isHidden());
         QCOMPARE(originalSize->text(), QStringLiteral("—"));
         QCOMPARE(compressedSize->text(), QStringLiteral("—"));
         QCOMPARE(method->text(), QStringLiteral("LZX"));
@@ -394,6 +400,7 @@ private slots:
         auto* fileCount = window.findChild<QLabel*>("fileCountValue");
         auto* compressedSize = window.findChild<QLabel*>("compressedSizeValue");
         auto* compress = window.findChild<QPushButton*>("compressButton");
+        auto* progress = window.findChild<QProgressBar*>("operationProgress");
         auto* status = window.findChild<QStatusBar*>("operationStatus");
         QVERIFY(pathField);
         QVERIFY(analyze);
@@ -401,6 +408,7 @@ private slots:
         QVERIFY(fileCount);
         QVERIFY(compressedSize);
         QVERIFY(compress);
+        QVERIFY(progress);
         QVERIFY(status);
 
         pathField->setText(temporaryDirectory.path());
@@ -426,13 +434,16 @@ private slots:
             auto* browse = window.findChild<QPushButton*>("browseButton");
             QVERIFY(browse);
             QTest::mouseClick(compress, Qt::LeftButton);
+            QVERIFY(!progress->isHidden());
             QVERIFY(!pathField->isEnabled());
             QVERIFY(!browse->isEnabled());
             QVERIFY(!analyze->isEnabled());
             QVERIFY(!compress->isEnabled());
             QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().startsWith("LZX:"), 5000);
+            QTRY_COMPARE_WITH_TIMEOUT(progress->maximum(), 1000, 5000);
             QVERIFY(!compress->isEnabled());
             QTRY_VERIFY_WITH_TIMEOUT(analyze->isEnabled(), 5000);
+            QVERIFY(progress->isHidden());
         }
     }
 
@@ -453,11 +464,13 @@ private slots:
         auto* analyze = window.findChild<QPushButton*>("analyzeButton");
         auto* browse = window.findChild<QPushButton*>("browseButton");
         auto* compress = window.findChild<QPushButton*>("compressButton");
+        auto* progress = window.findChild<QProgressBar*>("operationProgress");
         auto* status = window.findChild<QStatusBar*>("operationStatus");
         QVERIFY(pathField);
         QVERIFY(analyze);
         QVERIFY(browse);
         QVERIFY(compress);
+        QVERIFY(progress);
         QVERIFY(status);
 
         pathField->setText(temporaryDirectory.path());
@@ -471,6 +484,9 @@ private slots:
         connect(&timer, &QTimer::timeout, this, [&eventLoopTicks] { ++eventLoopTicks; });
         timer.start();
         QTest::mouseClick(analyze, Qt::LeftButton);
+        QVERIFY(!progress->isHidden());
+        QCOMPARE(progress->minimum(), 0);
+        QCOMPARE(progress->maximum(), 0);
         QVERIFY(!pathField->isEnabled());
         QVERIFY(!browse->isEnabled());
         QVERIFY(!analyze->isEnabled());
@@ -480,6 +496,7 @@ private slots:
         timer.stop();
 
         QVERIFY(eventLoopTicks > 0);
+        QVERIFY(progress->isHidden());
         QCOMPARE(pathField->isEnabled(), true);
         QCOMPARE(browse->isEnabled(), true);
         QCOMPARE(analyze->isEnabled(), true);
@@ -536,8 +553,10 @@ private slots:
         QCOMPARE(file.write(contents), static_cast<qint64>(contents.size()));
         file.close();
 
+        std::vector<compresso::CompressionProgress> progressUpdates;
         const auto report = compresso::CompressionBackend::compressDirectory(
-            std::filesystem::path(gameDirectory.toStdWString()));
+            std::filesystem::path(gameDirectory.toStdWString()),
+            [&progressUpdates](const auto& progress) { progressUpdates.push_back(progress); });
         if (!report.target_eligible) {
             QSKIP(qPrintable("Temporary directory is not on a supported local NTFS volume: "
                              + report.rejection_reason));
@@ -550,6 +569,21 @@ private slots:
         QCOMPARE(report.files.front().exit_code, 0);
         QVERIFY(!report.files.front().standard_output.isEmpty()
                 || !report.files.front().standard_error.isEmpty());
+        QVERIFY(progressUpdates.size() >= std::size_t{3});
+        QVERIFY(std::any_of(progressUpdates.begin(), progressUpdates.end(), [](const auto& update) {
+            return update.totals_known && update.completed_files == 0
+                   && update.total_files == 1;
+        }));
+        QCOMPARE(progressUpdates.back().completed_files, std::size_t{1});
+        QCOMPARE(progressUpdates.back().total_files, std::size_t{1});
+        QCOMPARE(progressUpdates.back().processed_logical_bytes,
+                 static_cast<std::uintmax_t>(contents.size()));
+        QCOMPARE(progressUpdates.back().total_logical_bytes,
+                 static_cast<std::uintmax_t>(contents.size()));
+        QVERIFY(progressUpdates.back().elapsed.count() >= 0);
+        QVERIFY(std::any_of(progressUpdates.begin(), progressUpdates.end(), [](const auto& update) {
+            return update.current_file.filename() == L"large asset with spaces.bin";
+        }));
 
         QFile afterCompression(filePath);
         QVERIFY(afterCompression.open(QIODevice::ReadOnly));
@@ -563,6 +597,61 @@ private slots:
         const std::uintmax_t allocatedBytes =
             (static_cast<std::uintmax_t>(allocatedHigh) << 32) | allocatedLow;
         QVERIFY(allocatedBytes < static_cast<std::uintmax_t>(contents.size()));
+    }
+
+    void compressionReportsFailedProcessAndCompletedProgress()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString gameDirectory = QDir(temporaryDirectory.path()).filePath("failed game");
+        QVERIFY(QDir().mkpath(gameDirectory));
+        const QString filePath = QDir(gameDirectory).filePath("failing asset.bin");
+        const QByteArray contents(4096, 'f');
+        QFile file(filePath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(contents), static_cast<qint64>(contents.size()));
+        file.close();
+
+        std::vector<compresso::CompressionProgress> progressUpdates;
+        const std::filesystem::path expectedFile(filePath.toStdWString());
+        bool runnerReceivedExpectedArguments = false;
+        const auto report = compresso::CompressionBackend::compressDirectory(
+            std::filesystem::path(gameDirectory.toStdWString()),
+            [&progressUpdates](const auto& progress) { progressUpdates.push_back(progress); },
+            [&expectedFile, &runnerReceivedExpectedArguments](
+                const std::filesystem::path& executable,
+                const std::filesystem::path& fileToCompress) {
+                runnerReceivedExpectedArguments =
+                    executable.filename() == std::filesystem::path(L"compact.exe")
+                    && fileToCompress.filename() == expectedFile.filename();
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                compresso::CompactProcessResult result;
+                result.started = true;
+                result.finished = true;
+                result.exit_code = 5;
+                result.standard_error = "simulated compact failure";
+                return result;
+            });
+        if (!report.target_eligible) {
+            QSKIP(qPrintable("Temporary directory is not on a supported local NTFS volume: "
+                             + report.rejection_reason));
+        }
+
+        QCOMPARE(report.failedCount(), std::size_t{1});
+        QVERIFY(runnerReceivedExpectedArguments);
+        QCOMPARE(report.skippedCount(), std::size_t{0});
+        QCOMPARE(report.compressedCount(), std::size_t{0});
+        QCOMPARE(report.files.front().exit_code, 5);
+        QCOMPARE(report.files.front().standard_error, QByteArray("simulated compact failure"));
+        QCOMPARE(progressUpdates.back().completed_files, std::size_t{1});
+        QCOMPARE(progressUpdates.back().processed_logical_bytes,
+                 static_cast<std::uintmax_t>(contents.size()));
+        QVERIFY(progressUpdates.back().elapsed >= std::chrono::milliseconds(30));
+        QVERIFY(progressUpdates.back().current_file.empty());
+
+        QFile unchanged(filePath);
+        QVERIFY(unchanged.open(QIODevice::ReadOnly));
+        QCOMPARE(unchanged.readAll(), contents);
     }
 
     void compressionSkipsFilesOpenForWriting()
@@ -582,8 +671,10 @@ private slots:
                                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         QVERIFY(writer != INVALID_HANDLE_VALUE);
 
+        std::vector<compresso::CompressionProgress> progressUpdates;
         const auto report = compresso::CompressionBackend::compressDirectory(
-            std::filesystem::path(gameDirectory.toStdWString()));
+            std::filesystem::path(gameDirectory.toStdWString()),
+            [&progressUpdates](const auto& progress) { progressUpdates.push_back(progress); });
         CloseHandle(writer);
         if (!report.target_eligible) {
             QSKIP(qPrintable("Temporary directory is not on a supported local NTFS volume: "
@@ -592,6 +683,10 @@ private slots:
 
         QCOMPARE(report.compressedCount(), std::size_t{0});
         QCOMPARE(report.skippedCount() + report.failedCount(), std::size_t{1});
+        QCOMPARE(progressUpdates.back().completed_files, std::size_t{1});
+        QCOMPARE(progressUpdates.back().total_files, std::size_t{1});
+        QCOMPARE(progressUpdates.back().processed_logical_bytes, std::uintmax_t{11});
+        QVERIFY(progressUpdates.back().current_file.empty());
         QFile unchanged(filePath);
         QVERIFY(unchanged.open(QIODevice::ReadOnly));
         QCOMPARE(unchanged.readAll(), QByteArray("active data"));

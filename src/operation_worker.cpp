@@ -27,17 +27,8 @@ void OperationWorker::run()
         } else {
             emit progressChanged(QStringLiteral("Preparing transparent NTFS LZX compression…"));
             CompressionReport result = CompressionBackend::compressDirectory(
-                directory_, [this](std::size_t completed, std::size_t total) {
-                    if (total == 0) {
-                        emit progressChanged(
-                            QStringLiteral("Scanning before LZX compression… %1 entries")
-                                .arg(static_cast<qulonglong>(completed)));
-                    } else {
-                        emit progressChanged(
-                            QStringLiteral("Applying LZX compression… %1 of %2 files")
-                                .arg(static_cast<qulonglong>(completed))
-                                .arg(static_cast<qulonglong>(total)));
-                    }
+                directory_, [this](const CompressionProgress& progress) {
+                    emit compressionProgress(progress);
                 });
             emit compressionCompleted(std::move(result));
         }

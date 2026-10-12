@@ -27,6 +27,7 @@ public slots:
 signals:
     void scanCompleted(compresso::ScanResult result);
     void compressionCompleted(compresso::CompressionReport result);
+    void compressionProgress(compresso::CompressionProgress progress);
     void progressChanged(QString message);
     void errorOccurred(QString message);
     void finished();
@@ -40,3 +41,4 @@ private:
 
 Q_DECLARE_METATYPE(compresso::ScanResult)
 Q_DECLARE_METATYPE(compresso::CompressionReport)
+Q_DECLARE_METATYPE(compresso::CompressionProgress)

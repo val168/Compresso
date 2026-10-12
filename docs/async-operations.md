@@ -6,4 +6,6 @@ The worker owns the scanner call or the compression backend call. The compressio
 
 When a worker finishes, the thread quits and the worker is deleted through Qt's deferred-deletion mechanism. Closing the window during an operation defers the close until the worker exits. The window destructor also waits for the thread, covering application shutdown paths that bypass the close event. Operations are allowed to finish rather than being interrupted while `compact.exe` may be working on a file.
 
-The UI tests exercise scanner progress, verify that a timer continues firing while a larger scan runs, and check that directory controls are disabled and restored around scans and compression.
+The compression worker reports completed and total file counts, accounted logical bytes, elapsed time, and the current filename through a typed progress signal. The status text stays visible during work, and a one-second UI timer refreshes the elapsed duration while an individual `compact.exe` process runs. The standard progress bar is indeterminate while totals are unknown and changes to a determinate percentage only after enumeration provides a file count. Each completion increment follows an actual file result, including skips and failures.
+
+The UI tests exercise scanner progress, verify that a timer continues firing while a larger scan runs, and check that directory controls are disabled and restored around scans and compression. Backend tests cover successful, failed, and skipped files and assert their associated progress totals.

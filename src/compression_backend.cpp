@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <string>
 #include <system_error>
 
@@ -194,6 +195,37 @@ QString skipReasonMessage(compresso::SkipReason reason)
     return "The entry was skipped.";
 }
 
+compresso::CompactProcessResult runCompact(const std::filesystem::path& executable,
+                                           const std::filesystem::path& file)
+{
+    QProcess process;
+    process.setProgram(QString::fromStdWString(executable.native()));
+    process.setArguments({QStringLiteral("/C"), QStringLiteral("/EXE:LZX"),
+                          QStringLiteral("/Q"), QString::fromStdWString(file.native())});
+    process.start();
+
+    compresso::CompactProcessResult result;
+    if (!process.waitForStarted()) {
+        result.error_message = "compact.exe could not start: " + process.errorString();
+        return result;
+    }
+    result.started = true;
+    result.finished = process.waitForFinished(-1);
+    if (!result.finished) {
+        result.error_message = "Could not collect the compact.exe process result: "
+                               + process.errorString();
+    }
+    result.crashed = process.error() != QProcess::UnknownError
+                     && process.exitStatus() == QProcess::CrashExit;
+    result.exit_code = process.exitCode();
+    result.standard_output = process.readAllStandardOutput();
+    result.standard_error = process.readAllStandardError();
+    if (result.crashed) {
+        result.error_message = "compact.exe terminated unexpectedly: " + process.errorString();
+    }
+    return result;
+}
+
 } // namespace
 
 std::size_t compresso::CompressionReport::compressedCount() const noexcept
@@ -218,8 +250,14 @@ std::size_t compresso::CompressionReport::failedCount() const noexcept
 }
 
 compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
-    const std::filesystem::path& directory, ProgressCallback progress)
+    const std::filesystem::path& directory, ProgressCallback progress,
+    ProcessRunner processRunner)
 {
+    const auto startedAt = std::chrono::steady_clock::now();
+    const auto elapsed = [&] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startedAt);
+    };
     CompressionReport report;
     report.target_directory = directory;
 
@@ -317,19 +355,38 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
 
     report.target_eligible = true;
     const ScanResult scan = DirectoryScanner::scan(
-        canonicalDirectory, [&progress](std::size_t visited, std::size_t) {
+        canonicalDirectory, [&progress, &elapsed](std::size_t, std::size_t) {
             if (progress) {
-                progress(visited, 0);
+                CompressionProgress update;
+                update.elapsed = elapsed();
+                progress(update);
             }
         });
-    const std::size_t totalEntries = scan.skipped_entries.size() + scan.files.size();
-    std::size_t completedEntries = 0;
-    const auto appendResult = [&](CompressionFileResult result) {
-        report.files.push_back(std::move(result));
-        ++completedEntries;
+    if (!processRunner) {
+        processRunner = runCompact;
+    }
+    const std::size_t totalFiles = scan.files.size();
+    std::size_t completedFiles = 0;
+    std::uintmax_t processedBytes = 0;
+    const auto notifyProgress = [&](const std::filesystem::path& currentFile = {}) {
         if (progress) {
-            progress(completedEntries, totalEntries);
+            CompressionProgress update;
+            update.completed_files = completedFiles;
+            update.total_files = totalFiles;
+            update.processed_logical_bytes = processedBytes;
+            update.total_logical_bytes = scan.total_logical_bytes;
+            update.elapsed = elapsed();
+            update.current_file = currentFile;
+            update.totals_known = true;
+            progress(update);
         }
+    };
+    notifyProgress();
+    const auto appendResult = [&](CompressionFileResult result, std::uintmax_t logicalSize) {
+        report.files.push_back(std::move(result));
+        ++completedFiles;
+        processedBytes += logicalSize;
+        notifyProgress();
     };
     for (const auto& entry : scan.skipped_entries) {
         const CompressionSkipReason reason = entry.reason == SkipReason::reparse_point
@@ -337,30 +394,32 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
             : entry.reason == SkipReason::unsupported_file_type
                 ? CompressionSkipReason::unsupported_entry
                 : CompressionSkipReason::inaccessible;
-        appendResult(skipped(entry.path, reason, skipReasonMessage(entry.reason)));
+        report.files.push_back(skipped(entry.path, reason, skipReasonMessage(entry.reason)));
     }
 
     for (const auto& scannedFile : scan.files) {
         const std::filesystem::path filePath = scannedFile.path;
+        notifyProgress(filePath);
         const DWORD attributes = GetFileAttributesW(filePath.c_str());
         if (attributes == INVALID_FILE_ATTRIBUTES) {
             appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
-                                 "File attributes are unavailable."));
+                                 "File attributes are unavailable."), scannedFile.logical_size_bytes);
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
             appendResult(skipped(filePath, CompressionSkipReason::reparse_point,
-                                 "Symbolic links and junctions are not compressed."));
+                                 "Symbolic links and junctions are not compressed."),
+                         scannedFile.logical_size_bytes);
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_ENCRYPTED) != 0) {
             appendResult(skipped(filePath, CompressionSkipReason::encrypted,
-                                 "Encrypted files are not compressed."));
+                                 "Encrypted files are not compressed."), scannedFile.logical_size_bytes);
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0) {
             appendResult(skipped(filePath, CompressionSkipReason::sparse,
-                                 "Sparse files are not compressed."));
+                                 "Sparse files are not compressed."), scannedFile.logical_size_bytes);
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_COMPRESSED) != 0
@@ -368,60 +427,54 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
                 && scannedFile.allocated_size_bytes < scannedFile.logical_size_bytes)) {
             appendResult(skipped(filePath, CompressionSkipReason::already_compressed,
                                  "The file is already compressed or its allocation "
-                                 "is below its logical size."));
+                                 "is below its logical size."), scannedFile.logical_size_bytes);
             continue;
         }
 
         FileStamp before;
         if (!readFileStamp(filePath, before)) {
             appendResult(skipped(filePath, CompressionSkipReason::active_or_busy,
-                                 "The file is inaccessible, write-protected, or open for writing."));
+                                 "The file is inaccessible, write-protected, or open for writing."),
+                         scannedFile.logical_size_bytes);
             continue;
         }
         if (!scannedFile.allocated_size_available) {
             appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
-                                 "The current disk allocation could not be measured."));
+                                 "The current disk allocation could not be measured."),
+                         scannedFile.logical_size_bytes);
             continue;
         }
 
-        QProcess process;
-        process.setProgram(QString::fromStdWString(compact.native()));
-        process.setArguments({QStringLiteral("/C"), QStringLiteral("/EXE:LZX"),
-                              QStringLiteral("/Q"), QString::fromStdWString(filePath.native())});
-        process.start();
-        if (!process.waitForStarted()) {
-            appendResult(failed(filePath, "compact.exe could not start: " + process.errorString()));
+        const CompactProcessResult process = processRunner(compact, filePath);
+        if (!process.started) {
+            appendResult(failed(filePath, process.error_message), scannedFile.logical_size_bytes);
             continue;
         }
-        if (!process.waitForFinished(-1)) {
-            CompressionFileResult result = failed(
-                filePath, "Could not collect the compact.exe process result: "
-                              + process.errorString());
-            result.exit_code = process.exitCode();
-            result.standard_output = process.readAllStandardOutput();
-            result.standard_error = process.readAllStandardError();
-            appendResult(std::move(result));
+        if (!process.finished) {
+            CompressionFileResult result = failed(filePath, process.error_message);
+            result.exit_code = process.exit_code;
+            result.standard_output = process.standard_output;
+            result.standard_error = process.standard_error;
+            appendResult(std::move(result), scannedFile.logical_size_bytes);
             continue;
         }
 
         CompressionFileResult fileResult;
         fileResult.path = filePath;
-        fileResult.exit_code = process.exitCode();
-        fileResult.standard_output = process.readAllStandardOutput();
-        fileResult.standard_error = process.readAllStandardError();
+        fileResult.exit_code = process.exit_code;
+        fileResult.standard_output = process.standard_output;
+        fileResult.standard_error = process.standard_error;
 
-        if (process.error() != QProcess::UnknownError
-            && process.exitStatus() == QProcess::CrashExit) {
+        if (process.crashed) {
             fileResult.state = CompressionFileState::failed;
-            fileResult.error_message = "compact.exe terminated unexpectedly: "
-                                       + process.errorString();
-            appendResult(std::move(fileResult));
+            fileResult.error_message = process.error_message;
+            appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
             continue;
         }
-        if (fileResult.exit_code != 0) {
+        if (process.exit_code != 0) {
             fileResult.state = CompressionFileState::failed;
             fileResult.error_message = "compact.exe reported that compression failed.";
-            appendResult(std::move(fileResult));
+            appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
             continue;
         }
 
@@ -429,7 +482,7 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
         if (!readFileStamp(filePath, after) || !sameFileStamp(before, after)) {
             fileResult.state = CompressionFileState::failed;
             fileResult.error_message = "The file changed or became busy during compression.";
-            appendResult(std::move(fileResult));
+            appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
             continue;
         }
 
@@ -451,7 +504,7 @@ compresso::CompressionReport compresso::CompressionBackend::compressDirectory(
             fileResult.state = CompressionFileState::failed;
             fileResult.error_message = "The filesystem did not provide a final allocation measurement.";
         }
-        appendResult(std::move(fileResult));
+        appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
     }
 
     return report;

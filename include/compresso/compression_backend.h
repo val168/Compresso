@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -41,6 +42,28 @@ struct CompressionFileResult
     QString error_message;
 };
 
+struct CompressionProgress
+{
+    std::size_t completed_files = 0;
+    std::size_t total_files = 0;
+    std::uintmax_t processed_logical_bytes = 0;
+    std::uintmax_t total_logical_bytes = 0;
+    std::chrono::milliseconds elapsed{};
+    std::filesystem::path current_file;
+    bool totals_known = false;
+};
+
+struct CompactProcessResult
+{
+    bool started = false;
+    bool finished = false;
+    bool crashed = false;
+    int exit_code = -1;
+    QByteArray standard_output;
+    QByteArray standard_error;
+    QString error_message;
+};
+
 struct CompressionReport
 {
     std::filesystem::path target_directory;
@@ -57,10 +80,13 @@ struct CompressionReport
 class CompressionBackend final
 {
 public:
-    using ProgressCallback = std::function<void(std::size_t completed, std::size_t total)>;
+    using ProgressCallback = std::function<void(const CompressionProgress& progress)>;
+    using ProcessRunner = std::function<CompactProcessResult(
+        const std::filesystem::path& executable, const std::filesystem::path& file)>;
 
     [[nodiscard]] static CompressionReport compressDirectory(
-        const std::filesystem::path& directory, ProgressCallback progress = {});
+        const std::filesystem::path& directory, ProgressCallback progress = {},
+        ProcessRunner processRunner = {});
 };
 
 } // namespace compresso
