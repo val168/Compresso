@@ -47,7 +47,9 @@ Run `out/build/debug/Compresso.exe`. Ensure the Qt 6 and MinGW runtime `bin` dir
 
 Compression is per file and reports successes, failures, and skipped entries. It excludes volume roots, protected Windows locations, and Compresso's own installation directory. LZX is optimized for read-heavy files; test a specific game before using it. See the [compression design note](docs/compression.md) and [backend details](docs/compression-backend.md).
 
-Scanning and LZX compression run on an owned Qt worker thread. Progress and results are delivered to the window through queued signals, and closing the window waits for an active operation to finish. See [the filesystem scanning note](docs/filesystem-scanning.md) for scanner behavior and [the operation worker note](docs/async-operations.md) for the worker lifecycle.
+Scanning, LZX compression, and restoration run on an owned Qt worker thread. Progress and results are delivered to the window through queued signals, and closing the window waits for an active operation to finish. See [the filesystem scanning note](docs/filesystem-scanning.md) for scanner behavior and [the operation worker note](docs/async-operations.md) for the worker lifecycle.
+
+Failures use structured error codes and detailed diagnostics in the optional operation log. See [error handling](docs/error-handling.md) for the error categories and process policy.
 
 ## License
 

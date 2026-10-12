@@ -1,5 +1,7 @@
 #pragma once
 
+#include "compresso/operation_error.h"
+
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -31,6 +33,7 @@ enum class CompressionSkipReason
     sparse,
     active_or_busy,
     multiple_hard_links,
+    operation_aborted,
     unsupported_entry
 };
 
@@ -43,6 +46,7 @@ struct CompressionFileResult
     QByteArray standard_output;
     QByteArray standard_error;
     QString error_message;
+    std::optional<OperationError> error;
 };
 
 struct CompressionProgress
@@ -65,6 +69,8 @@ struct CompactProcessResult
     QByteArray standard_output;
     QByteArray standard_error;
     QString error_message;
+    std::optional<OperationErrorCode> error_code;
+    int native_error = 0;
 };
 
 struct CompressionReport
@@ -73,6 +79,8 @@ struct CompressionReport
     std::wstring filesystem_type;
     bool target_eligible = false;
     QString rejection_reason;
+    std::optional<OperationError> error;
+    std::vector<OperationError> issues;
     std::vector<CompressionFileResult> files;
 
     [[nodiscard]] std::size_t compressedCount() const noexcept;

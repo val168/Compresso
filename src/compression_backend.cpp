@@ -118,18 +118,24 @@ struct FileStamp
     BY_HANDLE_FILE_INFORMATION information{};
 };
 
-bool readFileStamp(const std::filesystem::path& path, FileStamp& stamp)
+bool readFileStamp(const std::filesystem::path& path, FileStamp& stamp,
+                   DWORD* nativeError = nullptr)
 {
-    // Write-attribute access with no write sharing rejects common busy-file cases while
-    // releasing the handle before compact.exe needs the file.
+    // Attribute write access rejects many busy-file cases while allowing other readers.
     HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                                 FILE_SHARE_READ, nullptr,
                                 OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
+        if (nativeError != nullptr) {
+            *nativeError = GetLastError();
+        }
         return false;
     }
 
     const bool okay = GetFileInformationByHandle(handle, &stamp.information) != FALSE;
+    if (!okay && nativeError != nullptr) {
+        *nativeError = GetLastError();
+    }
     CloseHandle(handle);
     return okay;
 }
@@ -243,13 +249,81 @@ compresso::CompressionFileResult skipped(const std::filesystem::path& path,
     return result;
 }
 
+void attachError(compresso::CompressionFileResult& result,
+                 compresso::OperationErrorCode code, std::string details,
+                 int nativeCode = 0, int exitCode = -1)
+{
+    result.error_message = QString::fromStdString(compresso::operationErrorMessage(code));
+    compresso::OperationError issue;
+    issue.code = code;
+    issue.path = result.path;
+    issue.native_code = nativeCode;
+    issue.process_exit_code = exitCode;
+    issue.technical_details = std::move(details);
+    result.error = std::move(issue);
+}
+
+compresso::CompressionFileResult aborted(const std::filesystem::path& path)
+{
+    return skipped(path, compresso::CompressionSkipReason::operation_aborted,
+                   "Not attempted because an earlier serious error stopped the operation.");
+}
+
 compresso::CompressionFileResult failed(const std::filesystem::path& path, QString error)
 {
     compresso::CompressionFileResult result;
     result.path = path;
     result.state = compresso::CompressionFileState::failed;
     result.error_message = std::move(error);
+    compresso::OperationError issue;
+    issue.code = compresso::OperationErrorCode::unexpected_failure;
+    issue.path = path;
+    issue.technical_details = result.error_message.toStdString();
+    result.error = std::move(issue);
     return result;
+}
+
+void reject(compresso::CompressionReport& report, compresso::OperationErrorCode code,
+            QString message, int nativeCode = 0, std::string details = {})
+{
+    report.rejection_reason = std::move(message);
+    compresso::OperationError issue;
+    issue.code = code;
+    issue.path = report.target_directory;
+    issue.native_code = nativeCode;
+    issue.technical_details = details.empty() ? report.rejection_reason.toStdString()
+                                              : std::move(details);
+    report.error = std::move(issue);
+}
+
+void setFileError(compresso::CompressionFileResult& result,
+                  compresso::OperationErrorCode code, std::string details,
+                  int nativeCode = 0, int exitCode = -1)
+{
+    attachError(result, code, std::move(details), nativeCode, exitCode);
+}
+
+std::string processDetails(const compresso::CompactProcessResult& process)
+{
+    std::string details;
+    if (!process.error_message.isEmpty()) {
+        details = process.error_message.toStdString();
+    }
+    if (process.exit_code >= 0) {
+        if (!details.empty()) details += "\n";
+        details += "compact.exe exit code: " + std::to_string(process.exit_code);
+    }
+    if (!process.standard_output.isEmpty()) {
+        if (!details.empty()) details += "\n";
+        details += "stdout:\n"
+                   + QString::fromLocal8Bit(process.standard_output).toUtf8().toStdString();
+    }
+    if (!process.standard_error.isEmpty()) {
+        if (!details.empty()) details += "\n";
+        details += "stderr:\n"
+                   + QString::fromLocal8Bit(process.standard_error).toUtf8().toStdString();
+    }
+    return details;
 }
 
 QString skipReasonMessage(compresso::SkipReason reason)
@@ -285,6 +359,8 @@ compresso::CompactProcessResult runCompact(const std::filesystem::path& executab
     compresso::CompactProcessResult result;
     if (!process.waitForStarted()) {
         result.error_message = "compact.exe could not start: " + process.errorString();
+        result.error_code = compresso::OperationErrorCode::process_launch_failed;
+        result.native_error = static_cast<int>(process.error());
         return result;
     }
     result.started = true;
@@ -292,6 +368,8 @@ compresso::CompactProcessResult runCompact(const std::filesystem::path& executab
     if (!result.finished) {
         result.error_message = "Could not collect the compact.exe process result: "
                                + process.errorString();
+        result.error_code = compresso::OperationErrorCode::process_terminated;
+        result.native_error = static_cast<int>(process.error());
     }
     result.crashed = process.error() != QProcess::UnknownError
                      && process.exitStatus() == QProcess::CrashExit;
@@ -300,6 +378,8 @@ compresso::CompactProcessResult runCompact(const std::filesystem::path& executab
     result.standard_error = process.readAllStandardError();
     if (result.crashed) {
         result.error_message = "compact.exe terminated unexpectedly: " + process.errorString();
+        result.error_code = compresso::OperationErrorCode::process_terminated;
+        result.native_error = static_cast<int>(process.error());
     }
     return result;
 }
@@ -356,11 +436,21 @@ compresso::CompressionReport runDirectoryOperation(
     const DWORD selectedAttributes = GetFileAttributesW(directory.c_str());
     if (selectedAttributes == INVALID_FILE_ATTRIBUTES
         || (selectedAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-        report.rejection_reason = "Choose an accessible game directory.";
+        const bool attributesUnavailable = selectedAttributes == INVALID_FILE_ATTRIBUTES;
+        const DWORD error = attributesUnavailable ? GetLastError() : ERROR_DIRECTORY;
+        reject(report, attributesUnavailable
+                           ? classifyWindowsError(error)
+                           : OperationErrorCode::missing_directory,
+               attributesUnavailable
+                   ? QString::fromStdString(operationErrorMessage(classifyWindowsError(error)))
+                   : QStringLiteral("Choose an accessible game directory."),
+               static_cast<int>(error),
+               std::system_category().message(static_cast<int>(error)));
         return report;
     }
     if ((selectedAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-        report.rejection_reason = "Symbolic links and junctions cannot be processed.";
+        reject(report, OperationErrorCode::unsafe_target,
+               "Choose a game directory that is not a symbolic link or junction.");
         return report;
     }
 
@@ -368,28 +458,39 @@ compresso::CompressionReport runDirectoryOperation(
     const std::filesystem::path canonicalDirectory = std::filesystem::canonical(directory,
                                                                                  canonicalError);
     if (canonicalError || !std::filesystem::is_directory(canonicalDirectory, canonicalError)) {
-        report.rejection_reason = "Choose an accessible game directory.";
+        const OperationErrorCode code = canonicalError
+            ? classifyWindowsError(static_cast<unsigned long>(canonicalError.value()))
+            : OperationErrorCode::missing_directory;
+        reject(report, code,
+               canonicalError ? QString::fromStdString(operationErrorMessage(code))
+                              : QStringLiteral("Choose an accessible game directory."),
+               canonicalError.value(),
+               canonicalError ? canonicalError.message() : "The path is not a directory.");
         return report;
     }
 
     const DWORD directoryAttributes = GetFileAttributesW(canonicalDirectory.c_str());
     if (directoryAttributes == INVALID_FILE_ATTRIBUTES
         || (directoryAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-        report.rejection_reason = "Symbolic links and junctions cannot be processed.";
+        reject(report, OperationErrorCode::unsafe_target,
+               "Choose a game directory that is not a symbolic link or junction.");
         return report;
     }
 
     const std::wstring volumeRoot = volumeRootFor(canonicalDirectory);
     if (volumeRoot.empty()) {
-        report.rejection_reason = "The target volume could not be identified.";
+        reject(report, OperationErrorCode::unsupported_filesystem,
+               "The target volume could not be identified.");
         return report;
     }
     if (pathsAreEqual(canonicalDirectory, std::filesystem::path(volumeRoot))) {
-        report.rejection_reason = "A volume root cannot be compressed.";
+        reject(report, OperationErrorCode::unsafe_target,
+               "A volume root cannot be compressed.");
         return report;
     }
     if (GetDriveTypeW(volumeRoot.c_str()) != DRIVE_FIXED) {
-        report.rejection_reason = "Choose a local fixed NTFS volume.";
+        reject(report, OperationErrorCode::unsupported_filesystem,
+               "Choose a local fixed NTFS volume.");
         return report;
     }
 
@@ -398,13 +499,18 @@ compresso::CompressionReport runDirectoryOperation(
     if (!GetVolumeInformationW(volumeRoot.c_str(), nullptr, 0, nullptr, nullptr, &volumeFlags,
                                filesystemName.data(),
                                static_cast<DWORD>(filesystemName.size()))) {
-        report.rejection_reason = "The target volume information could not be read.";
+        const DWORD error = GetLastError();
+        reject(report, classifyWindowsError(error),
+               "The target volume information could not be read.", static_cast<int>(error),
+               std::system_category().message(static_cast<int>(error)));
         return report;
     }
     filesystemName.resize(std::char_traits<wchar_t>::length(filesystemName.c_str()));
     report.filesystem_type = filesystemName;
     if (filesystemName != L"NTFS" || (volumeFlags & FILE_FILE_COMPRESSION) == 0) {
-        report.rejection_reason = "The target volume does not support NTFS LZX compression.";
+        reject(report, OperationErrorCode::unsupported_filesystem,
+               "The target volume does not support NTFS LZX compression.", 0,
+               "Detected filesystem does not provide NTFS file compression.");
         return report;
     }
 
@@ -421,7 +527,8 @@ compresso::CompressionReport runDirectoryOperation(
     for (const auto& protectedDirectory : protectedDirectories) {
         if (!protectedDirectory.empty() && pathIsSameOrChild(canonicalDirectory,
                                                               protectedDirectory)) {
-            report.rejection_reason = "Windows and protected system locations are excluded.";
+            reject(report, OperationErrorCode::unsafe_target,
+                   "Windows and protected system locations are excluded.");
             return report;
         }
     }
@@ -435,13 +542,16 @@ compresso::CompressionReport runDirectoryOperation(
         && !installCanonicalError
         && (pathIsSameOrChild(canonicalDirectory, canonicalInstallDirectory)
             || pathIsSameOrChild(canonicalInstallDirectory, canonicalDirectory))) {
-        report.rejection_reason = "Compresso's installation directory is excluded.";
+        reject(report, OperationErrorCode::unsafe_target,
+               "Compresso's installation directory is excluded.");
         return report;
     }
 
     const std::filesystem::path compact = compactExecutable();
     if (compact.empty() || GetFileAttributesW(compact.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        report.rejection_reason = "Windows compact.exe could not be located.";
+        reject(report, OperationErrorCode::process_launch_failed,
+               "Windows compact.exe could not be located.",
+               static_cast<int>(GetLastError()), "compact.exe was not found in the system directory.");
         return report;
     }
 
@@ -454,6 +564,7 @@ compresso::CompressionReport runDirectoryOperation(
                 progress(update);
             }
         });
+    report.issues = scan.errors;
     if (!processRunner) {
         processRunner = [restoring](const auto& executable, const auto& file) {
             return runCompact(executable, file, restoring);
@@ -476,6 +587,7 @@ compresso::CompressionReport runDirectoryOperation(
         }
     };
     notifyProgress();
+    bool abortRemaining = false;
     const auto appendResult = [&](CompressionFileResult result, std::uintmax_t logicalSize) {
         report.files.push_back(std::move(result));
         ++completedFiles;
@@ -493,11 +605,20 @@ compresso::CompressionReport runDirectoryOperation(
 
     for (const auto& scannedFile : scan.files) {
         const std::filesystem::path filePath = scannedFile.path;
+        if (abortRemaining) {
+            appendResult(aborted(filePath), scannedFile.logical_size_bytes);
+            continue;
+        }
         notifyProgress(filePath);
         const DWORD attributes = GetFileAttributesW(filePath.c_str());
         if (attributes == INVALID_FILE_ATTRIBUTES) {
-            appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
-                                 "File attributes are unavailable."), scannedFile.logical_size_bytes);
+            const DWORD error = GetLastError();
+            CompressionFileResult result = skipped(filePath, CompressionSkipReason::inaccessible,
+                                                   "File attributes are unavailable.");
+            attachError(result, classifyWindowsError(error),
+                        std::system_category().message(static_cast<int>(error)),
+                        static_cast<int>(error));
+            appendResult(std::move(result), scannedFile.logical_size_bytes);
             continue;
         }
         if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
@@ -543,10 +664,14 @@ compresso::CompressionReport runDirectoryOperation(
         }
 
         FileStamp before;
-        if (!readFileStamp(filePath, before)) {
-            appendResult(skipped(filePath, CompressionSkipReason::active_or_busy,
-                                 "The file is inaccessible, write-protected, or open for writing."),
-                         scannedFile.logical_size_bytes);
+        DWORD stampError = ERROR_SUCCESS;
+        if (!readFileStamp(filePath, before, &stampError)) {
+            const OperationErrorCode code = classifyWindowsError(stampError);
+            CompressionFileResult result = skipped(filePath, CompressionSkipReason::active_or_busy,
+                QString::fromStdString(operationErrorMessage(code)));
+            attachError(result, code, std::system_category().message(static_cast<int>(stampError)),
+                        static_cast<int>(stampError));
+            appendResult(std::move(result), scannedFile.logical_size_bytes);
             continue;
         }
         if (restoring && before.information.nNumberOfLinks > 1) {
@@ -572,7 +697,14 @@ compresso::CompressionReport runDirectoryOperation(
 
         const CompactProcessResult process = processRunner(compact, filePath);
         if (!process.started) {
-            appendResult(failed(filePath, process.error_message), scannedFile.logical_size_bytes);
+            CompressionFileResult result = failed(filePath, process.error_message);
+            result.exit_code = process.exit_code;
+            result.standard_output = process.standard_output;
+            result.standard_error = process.standard_error;
+            setFileError(result, process.error_code.value_or(OperationErrorCode::process_launch_failed),
+                         processDetails(process), process.native_error, process.exit_code);
+            abortRemaining = true;
+            appendResult(std::move(result), scannedFile.logical_size_bytes);
             continue;
         }
         if (!process.finished) {
@@ -580,6 +712,9 @@ compresso::CompressionReport runDirectoryOperation(
             result.exit_code = process.exit_code;
             result.standard_output = process.standard_output;
             result.standard_error = process.standard_error;
+            setFileError(result, process.error_code.value_or(OperationErrorCode::process_terminated),
+                         processDetails(process), process.native_error, process.exit_code);
+            abortRemaining = true;
             appendResult(std::move(result), scannedFile.logical_size_bytes);
             continue;
         }
@@ -592,13 +727,22 @@ compresso::CompressionReport runDirectoryOperation(
 
         if (process.crashed) {
             fileResult.state = CompressionFileState::failed;
-            fileResult.error_message = process.error_message;
+            setFileError(fileResult, OperationErrorCode::process_terminated,
+                         processDetails(process), process.native_error, process.exit_code);
+            abortRemaining = true;
             appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
             continue;
         }
         if (process.exit_code != 0) {
             fileResult.state = CompressionFileState::failed;
-            fileResult.error_message = "compact.exe reported that compression failed.";
+            const OperationErrorCode code = process.error_code.value_or(
+                OperationErrorCode::process_failed);
+            setFileError(fileResult, code,
+                         processDetails(process), process.native_error, process.exit_code);
+            // A nonzero compact.exe exit may represent a volume-wide failure such as low
+            // space. Stop here rather than attempting additional files without a reliable,
+            // locale-independent way to distinguish that from a per-file rejection.
+            abortRemaining = true;
             appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
             continue;
         }
@@ -608,9 +752,9 @@ compresso::CompressionReport runDirectoryOperation(
             || (restoring ? !sameFileIdentityAndSize(before, after)
                           : !sameFileStamp(before, after))) {
             fileResult.state = CompressionFileState::failed;
-            fileResult.error_message = restoring
-                ? "The file identity or size changed during restoration."
-                : "The file changed or became busy during compression.";
+            setFileError(fileResult, OperationErrorCode::file_changed,
+                         restoring ? "File identity or size changed during restoration."
+                                   : "File identity, size, or last-write time changed during compression.");
             appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
             continue;
         }
@@ -619,13 +763,16 @@ compresso::CompressionReport runDirectoryOperation(
             const LzxBackingState finalBackingState = lzxBackingState(filePath);
             if (finalBackingState == LzxBackingState::unavailable) {
                 fileResult.state = CompressionFileState::failed;
-                fileResult.error_message = "The restored file's compression state could not be verified.";
+                setFileError(fileResult, OperationErrorCode::verification_failed,
+                             "WOF compression metadata is unavailable after compact.exe.");
             } else if (finalBackingState == LzxBackingState::lzx_compressed) {
                 fileResult.state = CompressionFileState::failed;
-                fileResult.error_message = "The file remains LZX-compressed.";
+                setFileError(fileResult, OperationErrorCode::verification_failed,
+                             "WOF still reports the LZX file provider after restoration.");
             } else if (fileDigest(filePath) != originalDigest) {
                 fileResult.state = CompressionFileState::failed;
-                fileResult.error_message = "The file contents changed during restoration.";
+                setFileError(fileResult, OperationErrorCode::file_changed,
+                             "The SHA-256 digest changed during restoration.");
             } else {
                 fileResult.state = CompressionFileState::restored;
             }
@@ -640,7 +787,10 @@ compresso::CompressionReport runDirectoryOperation(
                                        && finalAllocatedSize < scannedFile.allocated_size_bytes;
         if (finalAttributes == INVALID_FILE_ATTRIBUTES) {
             fileResult.state = CompressionFileState::failed;
-            fileResult.error_message = "The file could not be inspected after compression.";
+            const DWORD error = GetLastError();
+            setFileError(fileResult, classifyWindowsError(error),
+                         std::system_category().message(static_cast<int>(error)),
+                         static_cast<int>(error));
         } else if ((finalAttributes & FILE_ATTRIBUTE_COMPRESSED) != 0 || allocationReduced) {
             fileResult.state = CompressionFileState::compressed;
         } else if (finalAllocationAvailable) {
@@ -649,7 +799,8 @@ compresso::CompressionReport runDirectoryOperation(
             fileResult.error_message = "The filesystem did not retain LZX compression for this file.";
         } else {
             fileResult.state = CompressionFileState::failed;
-            fileResult.error_message = "The filesystem did not provide a final allocation measurement.";
+            setFileError(fileResult, OperationErrorCode::verification_failed,
+                         "GetCompressedFileSizeW did not return a final allocated size.");
         }
         appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
     }

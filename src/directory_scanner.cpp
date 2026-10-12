@@ -71,6 +71,19 @@ void skip(compresso::ScanResult& result, const std::filesystem::path& path,
           compresso::SkipReason reason, const std::error_code& error = {})
 {
     result.skipped_entries.push_back({path, reason, error});
+    if (reason == compresso::SkipReason::inaccessible_directory
+        || reason == compresso::SkipReason::inaccessible_entry
+        || reason == compresso::SkipReason::file_size_error
+        || reason == compresso::SkipReason::traversal_error) {
+        compresso::OperationError issue;
+        issue.code = error
+            ? compresso::classifyWindowsError(static_cast<unsigned long>(error.value()))
+            : compresso::OperationErrorCode::inaccessible_file;
+        issue.path = path;
+        issue.native_code = error.value();
+        issue.technical_details = error ? error.message() : "Filesystem entry was inaccessible.";
+        result.errors.push_back(std::move(issue));
+    }
 }
 
 compresso::VolumeInfo inspectVolume(const std::filesystem::path& root)
@@ -137,6 +150,22 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
     ScanResult result;
     result.root = root;
     result.volume = inspectVolume(root);
+    if (result.volume.error) {
+        OperationError issue;
+        issue.code = classifyWindowsError(static_cast<unsigned long>(result.volume.error.value()));
+        issue.path = root;
+        issue.native_code = result.volume.error.value();
+        issue.technical_details = result.volume.error.message();
+        result.errors.push_back(std::move(issue));
+    } else if (!result.volume.compression_eligible) {
+        OperationError issue;
+        issue.code = OperationErrorCode::unsupported_filesystem;
+        issue.path = root;
+        issue.technical_details = result.volume.filesystem_type.empty()
+            ? "Filesystem metadata is unavailable."
+            : "The filesystem does not advertise support for NTFS file compression.";
+        result.errors.push_back(std::move(issue));
+    }
     std::size_t entriesVisited = 0;
     const auto reportProgress = [&] {
         if (progress) {
@@ -223,6 +252,13 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
                         result.allocation_measurements_complete = false;
                         result.allocation_measurement_failures.push_back(
                             {entryPath, allocationError});
+                        OperationError issue;
+                        issue.code = classifyWindowsError(
+                            static_cast<unsigned long>(allocationError.value()));
+                        issue.path = entryPath;
+                        issue.native_code = allocationError.value();
+                        issue.technical_details = allocationError.message();
+                        result.errors.push_back(std::move(issue));
                     }
 
                     result.files.push_back(std::move(scannedFile));

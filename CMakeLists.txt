@@ -21,12 +21,14 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets)
 
 add_executable(Compresso WIN32
     src/main.cpp
+    src/operation_error.cpp
     src/compression_backend.cpp
     src/directory_validator.cpp
     src/directory_scanner.cpp
     src/operation_worker.cpp
     src/main_window.cpp
     include/compresso/directory_validator.h
+    include/compresso/operation_error.h
     include/compresso/compression_backend.h
     include/compresso/directory_scanner.h
     include/compresso/operation_worker.h
@@ -45,12 +47,14 @@ if(BUILD_TESTING)
 
     add_executable(CompressoUiTests
         tests/ui_tests.cpp
+        src/operation_error.cpp
         src/compression_backend.cpp
         src/directory_validator.cpp
         src/directory_scanner.cpp
         src/operation_worker.cpp
         src/main_window.cpp
         include/compresso/directory_validator.h
+        include/compresso/operation_error.h
         include/compresso/compression_backend.h
         include/compresso/directory_scanner.h
         include/compresso/operation_worker.h

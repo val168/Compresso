@@ -7,6 +7,7 @@
 #include <QMainWindow>
 #include <QElapsedTimer>
 #include <QString>
+#include <QStringList>
 
 class QLineEdit;
 class QLabel;
@@ -40,6 +41,7 @@ private:
     void displayRestoreResult(const compresso::CompressionReport& result,
                               const QString& directory);
     void displayCompressionProgress(const compresso::CompressionProgress& progress);
+    void showDiagnostics();
 
     QLineEdit* directoryPath_ = nullptr;
     QLabel* originalSizeValue_ = nullptr;
@@ -50,6 +52,7 @@ private:
     QPushButton* analyzeButton_ = nullptr;
     QPushButton* compressButton_ = nullptr;
     QPushButton* restoreButton_ = nullptr;
+    QPushButton* detailsButton_ = nullptr;
     QProgressBar* progressBar_ = nullptr;
     QTimer* progressTimer_ = nullptr;
     QElapsedTimer compressionClock_;
@@ -60,4 +63,5 @@ private:
     bool closeAfterOperation_ = false;
     bool analyzedDirectoryIsEligible_ = false;
     bool activeOperationIsRestore_ = false;
+    QStringList diagnosticLines_;
 };

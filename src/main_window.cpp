@@ -4,6 +4,8 @@
 #include "compresso/operation_worker.h"
 
 #include <QCloseEvent>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFrame>
 #include <QGridLayout>
@@ -14,6 +16,7 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QStatusBar>
 #include <QThread>
 #include <QTimer>
@@ -21,7 +24,61 @@
 #include <QWidget>
 
 #include <array>
+#include <algorithm>
 #include <chrono>
+
+namespace
+{
+
+QString diagnosticText(const compresso::OperationError& error)
+{
+    QString text = QString::fromStdString(compresso::operationErrorCodeName(error.code))
+                   + ": " + QString::fromStdString(compresso::operationErrorMessage(error.code));
+    if (!error.path.empty()) {
+        text += QStringLiteral("\nPath: ") + QString::fromStdWString(error.path.native());
+    }
+    if (error.native_code != 0) {
+        text += QStringLiteral("\nNative code: %1").arg(error.native_code);
+    }
+    if (error.process_exit_code >= 0) {
+        text += QStringLiteral("\ncompact.exe exit code: %1").arg(error.process_exit_code);
+    }
+    if (!error.technical_details.empty()) {
+        text += QStringLiteral("\n") + QString::fromUtf8(error.technical_details.c_str());
+    }
+    return text;
+}
+
+QString skippedEntryText(const compresso::SkippedEntry& entry)
+{
+    QString reason;
+    switch (entry.reason) {
+    case compresso::SkipReason::inaccessible_directory: reason = "inaccessible directory"; break;
+    case compresso::SkipReason::inaccessible_entry: reason = "inaccessible entry"; break;
+    case compresso::SkipReason::reparse_point: reason = "symbolic link or junction"; break;
+    case compresso::SkipReason::unsupported_file_type: reason = "unsupported entry"; break;
+    case compresso::SkipReason::file_size_error: reason = "file size unavailable"; break;
+    case compresso::SkipReason::traversal_error: reason = "traversal error"; break;
+    }
+    QString text = QStringLiteral("Skipped (%1): ").arg(reason)
+                   + QString::fromStdWString(entry.path.native());
+    if (entry.error) {
+        text += QStringLiteral("\n") + QString::fromStdString(entry.error.message());
+    }
+    return text;
+}
+
+QString skippedFileText(const compresso::CompressionFileResult& file)
+{
+    QString text = QStringLiteral("Skipped: ")
+                   + QString::fromStdWString(file.path.native());
+    if (!file.error_message.isEmpty()) {
+        text += QStringLiteral("\n") + file.error_message;
+    }
+    return text;
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -29,6 +86,7 @@ MainWindow::MainWindow(QWidget* parent)
     qRegisterMetaType<compresso::ScanResult>("compresso::ScanResult");
     qRegisterMetaType<compresso::CompressionReport>("compresso::CompressionReport");
     qRegisterMetaType<compresso::CompressionProgress>("compresso::CompressionProgress");
+    qRegisterMetaType<compresso::OperationError>("compresso::OperationError");
 
     setWindowTitle("Compresso");
     setMinimumWidth(420);
@@ -118,6 +176,11 @@ MainWindow::MainWindow(QWidget* parent)
     progressBar_->setFormat("%p%");
     progressBar_->hide();
     statusBar()->addPermanentWidget(progressBar_);
+    detailsButton_ = new QPushButton("Details", statusBar());
+    detailsButton_->setObjectName("operationDetailsButton");
+    detailsButton_->hide();
+    statusBar()->addPermanentWidget(detailsButton_);
+    connect(detailsButton_, &QPushButton::clicked, this, [this] { showDiagnostics(); });
     progressTimer_ = new QTimer(this);
     progressTimer_->setInterval(1000);
     connect(progressTimer_, &QTimer::timeout, this, [this] {
@@ -169,6 +232,8 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
 
     setOperationControlsEnabled(false);
     activeOperationIsRestore_ = kind == compresso::OperationWorker::Kind::restore;
+    diagnosticLines_.clear();
+    detailsButton_->hide();
     progressBar_->setRange(0, 0);
     progressBar_->show();
 
@@ -187,11 +252,14 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
                 displayCompressionProgress(progress);
             });
     connect(worker, &compresso::OperationWorker::errorOccurred, this,
-            [this](const QString& message) {
+            [this](const compresso::OperationError& error) {
                 analyzedDirectoryIsEligible_ = false;
                 compressButton_->setEnabled(false);
                 restoreButton_->setEnabled(false);
-                statusBar()->showMessage(message);
+                diagnosticLines_ = {diagnosticText(error)};
+                detailsButton_->setVisible(true);
+                statusBar()->showMessage(QString::fromStdString(
+                    compresso::operationErrorMessage(error.code)));
             });
     connect(worker, &compresso::OperationWorker::scanCompleted, this,
             [this, directory](const compresso::ScanResult& result) {
@@ -396,7 +464,19 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
         message += "; allocated size unavailable for " + locale.toString(
             static_cast<qulonglong>(result.allocation_measurement_failures.size())) + " files";
     }
+    diagnosticLines_.clear();
+    for (const auto& error : result.errors) {
+        diagnosticLines_.push_back(diagnosticText(error));
+    }
+    for (const auto& entry : result.skipped_entries) {
+        diagnosticLines_.push_back(skippedEntryText(entry));
+    }
+    detailsButton_->setVisible(!diagnosticLines_.isEmpty());
+    if (!result.volume.compression_eligible && !result.volume.error) {
+        message += "; LZX unavailable on this volume";
+    }
     message += ".";
+    if (!diagnosticLines_.isEmpty()) message += " See Details.";
     statusBar()->showMessage(message);
     analyzedDirectoryIsEligible_ = result.volume.compression_eligible
                                    && result.total_file_count > 0;
@@ -453,9 +533,16 @@ void MainWindow::displayCompressionResult(const compresso::CompressionReport& re
     }
 
     if (!result.target_eligible) {
-        statusBar()->showMessage(result.rejection_reason.isEmpty()
+        diagnosticLines_.clear();
+        if (result.error) {
+            diagnosticLines_.push_back(diagnosticText(*result.error));
+        }
+        detailsButton_->setVisible(!diagnosticLines_.isEmpty());
+        QString message = result.rejection_reason.isEmpty()
             ? "The selected directory is not eligible for LZX compression."
-            : result.rejection_reason);
+            : result.rejection_reason;
+        if (!diagnosticLines_.isEmpty()) message += " See Details.";
+        statusBar()->showMessage(message);
         analyzedDirectoryIsEligible_ = false;
         return;
     }
@@ -463,18 +550,47 @@ void MainWindow::displayCompressionResult(const compresso::CompressionReport& re
     const QLocale locale;
     compressedSizeValue_->setText("\u2014");
     analyzedDirectoryIsEligible_ = false;
+    diagnosticLines_.clear();
+    for (const auto& issue : result.issues) {
+        diagnosticLines_.push_back(diagnosticText(issue));
+    }
+    for (const auto& file : result.files) {
+        if (file.state == compresso::CompressionFileState::failed && file.error) {
+            diagnosticLines_.push_back(diagnosticText(*file.error));
+        } else if (file.state == compresso::CompressionFileState::skipped) {
+            diagnosticLines_.push_back(file.error ? diagnosticText(*file.error)
+                                                  : skippedFileText(file));
+        }
+    }
+    detailsButton_->setVisible(!diagnosticLines_.isEmpty());
 
     QString message = "LZX: "
         + locale.toString(static_cast<qulonglong>(result.compressedCount())) + " compressed";
     if (result.skippedCount() > 0) {
         message += ", " + locale.toString(static_cast<qulonglong>(result.skippedCount()))
                    + " skipped";
+        if (result.failedCount() == 0) {
+            const auto skippedIssue = std::find_if(result.files.begin(), result.files.end(),
+                [](const auto& file) {
+                    return file.state == compresso::CompressionFileState::skipped
+                           && file.error.has_value();
+                });
+            if (skippedIssue != result.files.end()) {
+                message += ". " + skippedIssue->error_message;
+            }
+        }
     }
     if (result.failedCount() > 0) {
         message += ", " + locale.toString(static_cast<qulonglong>(result.failedCount()))
                    + " failed";
+        const auto firstFailure = std::find_if(result.files.begin(), result.files.end(),
+            [](const auto& file) { return file.state == compresso::CompressionFileState::failed; });
+        if (firstFailure != result.files.end() && firstFailure->error) {
+            message += ". " + firstFailure->error_message;
+        }
     }
     message += ". Analyze again to refresh allocated size.";
+    if (!diagnosticLines_.isEmpty()) message += " See Details.";
     statusBar()->showMessage(message);
 }
 
@@ -486,9 +602,16 @@ void MainWindow::displayRestoreResult(const compresso::CompressionReport& result
     }
 
     if (!result.target_eligible) {
-        statusBar()->showMessage(result.rejection_reason.isEmpty()
+        diagnosticLines_.clear();
+        if (result.error) {
+            diagnosticLines_.push_back(diagnosticText(*result.error));
+        }
+        detailsButton_->setVisible(!diagnosticLines_.isEmpty());
+        QString message = result.rejection_reason.isEmpty()
             ? "The selected directory is not eligible for LZX restoration."
-            : result.rejection_reason);
+            : result.rejection_reason;
+        if (!diagnosticLines_.isEmpty()) message += " See Details.";
+        statusBar()->showMessage(message);
         analyzedDirectoryIsEligible_ = false;
         return;
     }
@@ -496,17 +619,69 @@ void MainWindow::displayRestoreResult(const compresso::CompressionReport& result
     const QLocale locale;
     compressedSizeValue_->setText("\u2014");
     analyzedDirectoryIsEligible_ = false;
+    diagnosticLines_.clear();
+    for (const auto& issue : result.issues) {
+        diagnosticLines_.push_back(diagnosticText(issue));
+    }
+    for (const auto& file : result.files) {
+        if (file.state == compresso::CompressionFileState::failed && file.error) {
+            diagnosticLines_.push_back(diagnosticText(*file.error));
+        } else if (file.state == compresso::CompressionFileState::skipped) {
+            diagnosticLines_.push_back(file.error ? diagnosticText(*file.error)
+                                                  : skippedFileText(file));
+        }
+    }
+    detailsButton_->setVisible(!diagnosticLines_.isEmpty());
 
     QString message = "Restore: "
         + locale.toString(static_cast<qulonglong>(result.restoredCount())) + " restored";
     if (result.skippedCount() > 0) {
         message += ", " + locale.toString(static_cast<qulonglong>(result.skippedCount()))
                    + " skipped";
+        if (result.failedCount() == 0) {
+            const auto skippedIssue = std::find_if(result.files.begin(), result.files.end(),
+                [](const auto& file) {
+                    return file.state == compresso::CompressionFileState::skipped
+                           && file.error.has_value();
+                });
+            if (skippedIssue != result.files.end()) {
+                message += ". " + skippedIssue->error_message;
+            }
+        }
     }
     if (result.failedCount() > 0) {
         message += ", " + locale.toString(static_cast<qulonglong>(result.failedCount()))
                    + " failed";
+        const auto firstFailure = std::find_if(result.files.begin(), result.files.end(),
+            [](const auto& file) { return file.state == compresso::CompressionFileState::failed; });
+        if (firstFailure != result.files.end() && firstFailure->error) {
+            message += ". " + firstFailure->error_message;
+        }
     }
     message += ". Analyze again to refresh allocated size.";
+    if (!diagnosticLines_.isEmpty()) message += " See Details.";
     statusBar()->showMessage(message);
+}
+
+void MainWindow::showDiagnostics()
+{
+    if (diagnosticLines_.isEmpty()) {
+        return;
+    }
+
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle("Operation details");
+    dialog->resize(620, 360);
+    auto* layout = new QVBoxLayout(dialog);
+    auto* details = new QPlainTextEdit(dialog);
+    details->setObjectName("operationDiagnosticLog");
+    details->setReadOnly(true);
+    details->setPlainText(diagnosticLines_.join("\n\n"));
+    layout->addWidget(details);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+    connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::close);
+    layout->addWidget(buttons);
+    dialog->show();
 }

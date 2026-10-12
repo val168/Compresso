@@ -1,5 +1,7 @@
 #pragma once
 
+#include "compresso/operation_error.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -74,6 +76,7 @@ struct ScanResult
     std::uintmax_t total_allocated_bytes = 0;
     bool allocation_measurements_complete = true;
     bool traversal_complete = true;
+    std::vector<OperationError> errors;
 };
 
 class DirectoryScanner final

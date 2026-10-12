@@ -4,6 +4,7 @@
 #include "compresso/compression_backend.h"
 
 #include <QDir>
+#include <QDialog>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
@@ -11,6 +12,7 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -471,6 +473,46 @@ private slots:
         }
     }
 
+    void scanProblemsHaveAnOptionalDetailsView()
+    {
+        QTemporaryDir temporaryDirectory;
+        QTemporaryDir outsideDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        QVERIFY(outsideDirectory.isValid());
+        const auto junction = std::filesystem::path(temporaryDirectory.path().toStdWString())
+                              / L"outside game data";
+        const auto outside = std::filesystem::path(outsideDirectory.path().toStdWString());
+        if (!createDirectoryJunction(junction, outside)) {
+            QSKIP("Directory junctions are not available in this test environment.");
+        }
+
+        MainWindow window;
+        auto* pathField = window.findChild<QLineEdit*>("gameDirectoryPath");
+        auto* analyze = window.findChild<QPushButton*>("analyzeButton");
+        auto* detailsButton = window.findChild<QPushButton*>("operationDetailsButton");
+        QVERIFY(pathField);
+        QVERIFY(analyze);
+        QVERIFY(detailsButton);
+        QVERIFY(detailsButton->isHidden());
+        pathField->setText(temporaryDirectory.path());
+        pathField->setFocus();
+        QTest::keyClick(pathField, Qt::Key_Return);
+        QTest::mouseClick(analyze, Qt::LeftButton);
+        auto* status = window.findChild<QStatusBar*>("operationStatus");
+        QVERIFY(status);
+        QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().startsWith("Scan complete:"), 5000);
+        QVERIFY(!detailsButton->isHidden());
+        QVERIFY(status->currentMessage().contains("See Details"));
+
+        QTest::mouseClick(detailsButton, Qt::LeftButton);
+        auto* log = window.findChild<QPlainTextEdit*>("operationDiagnosticLog");
+        QVERIFY(log);
+        QVERIFY(log->isReadOnly());
+        QVERIFY(log->toPlainText().contains("symbolic link or junction"));
+        window.findChild<QDialog*>()->close();
+        RemoveDirectoryW(junction.c_str());
+    }
+
     void asynchronousScanKeepsUiResponsiveAndLocksConflictingControls()
     {
         QTemporaryDir temporaryDirectory;
@@ -654,7 +696,12 @@ private slots:
 
         const auto restoreReport = compresso::CompressionBackend::restoreDirectory(
             std::filesystem::path(gameDirectory.toStdWString()));
-        QCOMPARE(restoreReport.restoredCount(), std::size_t{1});
+        const QString restoreFailure = restoreReport.files.empty()
+            ? QStringLiteral("No per-file result was returned.")
+            : restoreReport.files.front().error_message + "\n"
+                  + QString::fromUtf8(restoreReport.files.front().error
+                      ? restoreReport.files.front().error->technical_details.c_str() : "");
+        QVERIFY2(restoreReport.restoredCount() == 1, qPrintable(restoreFailure));
         QCOMPARE(restoreReport.failedCount(), std::size_t{0});
         QCOMPARE(restoreReport.skippedCount(), std::size_t{0});
         QCOMPARE(restoreReport.files.front().exit_code, 0);
@@ -751,6 +798,10 @@ private slots:
         QCOMPARE(report.compressedCount(), std::size_t{0});
         QCOMPARE(report.files.front().exit_code, 5);
         QCOMPARE(report.files.front().standard_error, QByteArray("simulated compact failure"));
+        QVERIFY(report.files.front().error);
+        QCOMPARE(report.files.front().error->code, compresso::OperationErrorCode::process_failed);
+        QVERIFY(QString::fromUtf8(report.files.front().error->technical_details.c_str())
+                    .contains("simulated compact failure"));
         QCOMPARE(progressUpdates.back().completed_files, std::size_t{1});
         QCOMPARE(progressUpdates.back().processed_logical_bytes,
                  static_cast<std::uintmax_t>(contents.size()));
@@ -791,6 +842,9 @@ private slots:
 
         QCOMPARE(report.compressedCount(), std::size_t{0});
         QCOMPARE(report.skippedCount() + report.failedCount(), std::size_t{1});
+        QVERIFY(report.files.front().error);
+        QCOMPARE(report.files.front().error->code,
+                 compresso::OperationErrorCode::process_failed);
         QCOMPARE(progressUpdates.back().completed_files, std::size_t{1});
         QCOMPARE(progressUpdates.back().total_files, std::size_t{1});
         QCOMPARE(progressUpdates.back().processed_logical_bytes, std::uintmax_t{11});
@@ -798,6 +852,133 @@ private slots:
         QFile unchanged(filePath);
         QVERIFY(unchanged.open(QIODevice::ReadOnly));
         QCOMPARE(unchanged.readAll(), QByteArray("active data"));
+    }
+
+    void operationErrorsClassifyWindowsConditions()
+    {
+        QCOMPARE(compresso::classifyWindowsError(ERROR_ACCESS_DENIED),
+                 compresso::OperationErrorCode::insufficient_permissions);
+        QCOMPARE(compresso::classifyWindowsError(ERROR_SHARING_VIOLATION),
+                 compresso::OperationErrorCode::file_in_use);
+        QCOMPARE(compresso::classifyWindowsError(ERROR_DISK_FULL),
+                 compresso::OperationErrorCode::insufficient_disk_space);
+        QCOMPARE(compresso::classifyWindowsError(ERROR_NOT_SUPPORTED),
+                 compresso::OperationErrorCode::unsupported_filesystem);
+        QVERIFY(QString::fromStdString(compresso::operationErrorMessage(
+                    compresso::OperationErrorCode::process_failed))
+                    .contains("free space"));
+    }
+
+    void missingDirectoryIsReportedStructurally()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const auto missing = std::filesystem::path(temporaryDirectory.path().toStdWString())
+                             / L"missing game folder";
+
+        const auto scan = compresso::DirectoryScanner::scan(missing);
+        QVERIFY(!scan.traversal_complete);
+        QVERIFY(!scan.errors.empty());
+        QCOMPARE(scan.errors.back().code, compresso::OperationErrorCode::missing_directory);
+
+        const auto report = compresso::CompressionBackend::compressDirectory(missing);
+        QVERIFY(!report.target_eligible);
+        QVERIFY(report.error);
+        QCOMPARE(report.error->code, compresso::OperationErrorCode::missing_directory);
+    }
+
+    void processLaunchFailureAndUnexpectedTerminationAreNotSuccess()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString gameDirectory = QDir(temporaryDirectory.path()).filePath("process failure game");
+        QVERIFY(QDir().mkpath(gameDirectory));
+        for (const QString& name : {QStringLiteral("first.bin"), QStringLiteral("second.bin")}) {
+            QFile file(QDir(gameDirectory).filePath(name));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write("test file"), qint64{9});
+        }
+
+        std::size_t launchAttempts = 0;
+        const auto launchFailure = compresso::CompressionBackend::compressDirectory(
+            std::filesystem::path(gameDirectory.toStdWString()), {},
+            [&launchAttempts](const auto&, const auto&) {
+                ++launchAttempts;
+                compresso::CompactProcessResult result;
+                result.error_code = compresso::OperationErrorCode::process_launch_failed;
+                result.error_message = "simulated failed start";
+                return result;
+            });
+        if (!launchFailure.target_eligible) {
+            QSKIP(qPrintable("Temporary directory is not on a supported local NTFS volume: "
+                             + launchFailure.rejection_reason));
+        }
+        QCOMPARE(launchAttempts, std::size_t{1});
+        QCOMPARE(launchFailure.compressedCount(), std::size_t{0});
+        QCOMPARE(launchFailure.failedCount(), std::size_t{1});
+        QCOMPARE(launchFailure.skippedCount(), std::size_t{1});
+        QCOMPARE(launchFailure.files.front().error->code,
+                 compresso::OperationErrorCode::process_launch_failed);
+        QVERIFY(launchFailure.files.back().skip_reason);
+        QCOMPARE(*launchFailure.files.back().skip_reason,
+                 compresso::CompressionSkipReason::operation_aborted);
+
+        std::size_t crashAttempts = 0;
+        const auto crashed = compresso::CompressionBackend::compressDirectory(
+            std::filesystem::path(gameDirectory.toStdWString()), {},
+            [&crashAttempts](const auto&, const auto&) {
+                ++crashAttempts;
+                compresso::CompactProcessResult result;
+                result.started = true;
+                result.finished = true;
+                result.crashed = true;
+                result.error_code = compresso::OperationErrorCode::process_terminated;
+                result.error_message = "simulated crash";
+                return result;
+            });
+        QCOMPARE(crashAttempts, std::size_t{1});
+        QCOMPARE(crashed.compressedCount(), std::size_t{0});
+        QCOMPARE(crashed.failedCount(), std::size_t{1});
+        QCOMPARE(crashed.skippedCount(), std::size_t{1});
+        QCOMPARE(crashed.files.front().error->code,
+                 compresso::OperationErrorCode::process_terminated);
+    }
+
+    void diskSpaceFailureStopsFurtherCompressionAttempts()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString gameDirectory = QDir(temporaryDirectory.path()).filePath("disk full game");
+        QVERIFY(QDir().mkpath(gameDirectory));
+        for (const QString& name : {QStringLiteral("asset one.bin"), QStringLiteral("asset two.bin")}) {
+            QFile file(QDir(gameDirectory).filePath(name));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write("asset data"), qint64{10});
+        }
+
+        std::size_t attempts = 0;
+        const auto report = compresso::CompressionBackend::compressDirectory(
+            std::filesystem::path(gameDirectory.toStdWString()), {},
+            [&attempts](const auto&, const auto&) {
+                ++attempts;
+                compresso::CompactProcessResult result;
+                result.started = true;
+                result.finished = true;
+                result.exit_code = ERROR_DISK_FULL;
+                result.error_code = compresso::OperationErrorCode::insufficient_disk_space;
+                result.standard_error = "simulated disk full";
+                return result;
+            });
+        if (!report.target_eligible) {
+            QSKIP(qPrintable("Temporary directory is not on a supported local NTFS volume: "
+                             + report.rejection_reason));
+        }
+        QCOMPARE(attempts, std::size_t{1});
+        QCOMPARE(report.compressedCount(), std::size_t{0});
+        QCOMPARE(report.failedCount(), std::size_t{1});
+        QCOMPARE(report.skippedCount(), std::size_t{1});
+        QCOMPARE(report.files.front().error->code,
+                 compresso::OperationErrorCode::insufficient_disk_space);
     }
 
     void compressionRejectsVolumeRoots()

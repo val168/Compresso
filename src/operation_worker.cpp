@@ -40,9 +40,15 @@ void OperationWorker::run()
             emit restorationCompleted(std::move(result));
         }
     } catch (const std::exception& exception) {
-        emit errorOccurred(QString::fromLocal8Bit(exception.what()));
+        OperationError error;
+        error.code = OperationErrorCode::unexpected_failure;
+        error.technical_details = exception.what();
+        emit errorOccurred(std::move(error));
     } catch (...) {
-        emit errorOccurred(QStringLiteral("The operation failed unexpectedly."));
+        OperationError error;
+        error.code = OperationErrorCode::unexpected_failure;
+        error.technical_details = "A non-standard C++ exception was thrown.";
+        emit errorOccurred(std::move(error));
     }
     emit finished();
 }
