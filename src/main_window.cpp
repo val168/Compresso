@@ -145,16 +145,6 @@ QIcon navigationIcon(int symbol)
             painter.drawEllipse(QPointF(4.5, y), 1.1, 1.1);
             painter.drawLine(QPointF(8.0, y), QPointF(17.0, y));
         }
-    } else {
-        painter.drawEllipse(QPointF(10.0, 10.0), 3.1, 3.1);
-        for (int angle = 0; angle < 360; angle += 45) {
-            painter.save();
-            painter.translate(10.0, 10.0);
-            painter.rotate(angle);
-            painter.drawLine(QPointF(0.0, -5.0), QPointF(0.0, -7.2));
-            painter.restore();
-        }
-        painter.drawEllipse(QPointF(10.0, 10.0), 7.0, 7.0);
     }
     return QIcon(image);
 }
@@ -392,32 +382,20 @@ MainWindow::MainWindow(QWidget* parent)
     auto* libraryNav = addNavButton(QStringLiteral("Library"), QStringLiteral("libraryNav"), 0);
     libraryNav->setChecked(true);
     auto* queueNav = addNavButton(QStringLiteral("Queue"), QStringLiteral("queueNav"), 1);
-    auto* settingsNav = addNavButton(QStringLiteral("Settings"), QStringLiteral("settingsNav"), 2);
     sideLayout->addStretch(1);
-    connect(settingsNav, &QPushButton::clicked, this, [this, settingsNav] {
-        settingsNav->setChecked(true);
-        if (!menuBar()->actions().isEmpty() && menuBar()->actions().front()->menu())
-            menuBar()->actions().front()->menu()->popup(
-                settingsNav->mapToGlobal(QPoint(settingsNav->width(), 0)));
-    });
-    connect(queueNav, &QPushButton::clicked, this, [this] {
+    connect(queueNav, &QPushButton::clicked, this, [this, libraryNav, queueNav] {
+        libraryNav->setChecked(false);
+        queueNav->setChecked(true);
         centerPages_->setCurrentIndex(1);
         statusBar()->showMessage(QStringLiteral("Queue runs sequentially."));
     });
-    connect(libraryNav, &QPushButton::clicked, this, [libraryNav, queueNav, settingsNav] {
+    connect(libraryNav, &QPushButton::clicked, this, [libraryNav, queueNav] {
         libraryNav->setChecked(true);
         queueNav->setChecked(false);
-        settingsNav->setChecked(false);
     });
     connect(libraryNav, &QPushButton::clicked, this, [this] {
         centerPages_->setCurrentIndex(0);
     });
-    connect(queueNav, &QPushButton::clicked, this, [libraryNav, queueNav, settingsNav] {
-        libraryNav->setChecked(false);
-        queueNav->setChecked(true);
-        settingsNav->setChecked(false);
-    });
-
     auto* center = new QWidget(shell);
     center->setObjectName(QStringLiteral("libraryCenter"));
     auto* centerLayout = new QVBoxLayout(center);

@@ -204,6 +204,15 @@ private slots:
         QCOMPARE(method->text(), QStringLiteral("LZX"));
     }
 
+    void navigationContainsOnlyLibraryAndQueue()
+    {
+        MainWindow window;
+
+        QVERIFY(window.findChild<QPushButton*>("libraryNav"));
+        QVERIFY(window.findChild<QPushButton*>("queueNav"));
+        QVERIFY(!window.findChild<QPushButton*>("settingsNav"));
+    }
+
     void parsesSteamLibraryManifestsWithoutInventingEntries()
     {
         QTemporaryDir temporaryDirectory;
