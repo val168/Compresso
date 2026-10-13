@@ -27,6 +27,16 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QTableView>
+#include <QStandardItemModel>
+#include <QSortFilterProxyModel>
+#include <QComboBox>
+#include <QHeaderView>
+#include <QStyle>
+#include <QItemSelectionModel>
+#include <QFileInfo>
+#include <QDesktopServices>
+#include <QUrl>
 
 #include <array>
 #include <algorithm>
@@ -83,6 +93,19 @@ QString skippedFileText(const compresso::CompressionFileResult& file)
     return text;
 }
 
+QString compactBytes(std::uintmax_t bytes)
+{
+    constexpr std::array<const char*, 6> units{"B", "KB", "MB", "GB", "TB", "PB"};
+    long double value = static_cast<long double>(bytes);
+    std::size_t unit = 0;
+    while (value >= 1024.0L && unit + 1 < units.size()) {
+        value /= 1024.0L;
+        ++unit;
+    }
+    return QStringLiteral("%1 %2").arg(static_cast<double>(value), 0, 'f', unit == 0 ? 0 : 1)
+        .arg(QString::fromLatin1(units[unit]));
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -92,7 +115,11 @@ MainWindow::MainWindow(QWidget* parent)
         *qobject_cast<QApplication*>(QApplication::instance()), this);
     setPalette(qApp->palette());
     connect(themeManager_, &compresso::ThemeManager::paletteApplied,
-            this, [this](const QPalette& palette) { setPalette(palette); });
+            this, [this](const QPalette& palette) {
+                setPalette(palette);
+                if (directoryPath_) directoryPath_->setPalette(palette);
+                if (progressBar_) progressBar_->setPalette(palette);
+            });
     qRegisterMetaType<compresso::ScanResult>("compresso::ScanResult");
     qRegisterMetaType<compresso::CompressionReport>("compresso::CompressionReport");
     qRegisterMetaType<compresso::CompressionProgress>("compresso::CompressionProgress");
@@ -209,12 +236,20 @@ MainWindow::MainWindow(QWidget* parent)
     actions->addWidget(compressButton_);
     actions->addWidget(restoreButton_);
 
+    auto* openFolderButton = new QPushButton(QStringLiteral("Open folder"), content);
+    openFolderButton->setObjectName(QStringLiteral("openFolderButton"));
+    connect(openFolderButton, &QPushButton::clicked, this, [this] {
+        if (!validatedDirectory_.isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(validatedDirectory_));
+    });
+
     layout->addWidget(directoryLabel);
     layout->addLayout(directoryRow);
     layout->addWidget(separator);
     layout->addLayout(details);
     layout->addStretch(1);
     layout->addLayout(actions);
+    layout->addWidget(openFolderButton);
     setCentralWidget(content);
 
     statusBar()->setObjectName("operationStatus");
@@ -253,6 +288,199 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { startCompression(); });
     connect(restoreButton_, &QPushButton::clicked, this,
             [this] { startRestore(); });
+
+    // Compact library shell. The existing directory controls remain the manual-add
+    // fallback and continue to drive the same validated worker/backend operations.
+    auto* previousContent = takeCentralWidget();
+    auto* shell = new QWidget(this);
+    shell->setObjectName(QStringLiteral("libraryShell"));
+    auto* shellLayout = new QHBoxLayout(shell);
+    shellLayout->setContentsMargins(0, 0, 0, 0);
+    shellLayout->setSpacing(0);
+
+    auto* sidebar = new QWidget(shell);
+    sidebar->setObjectName(QStringLiteral("sidebar"));
+    sidebar->setFixedWidth(176);
+    auto* sideLayout = new QVBoxLayout(sidebar);
+    sideLayout->setContentsMargins(12, 14, 12, 12);
+    sideLayout->setSpacing(8);
+    auto* brand = new QLabel(QStringLiteral("◈  Compresso"), sidebar);
+    brand->setObjectName(QStringLiteral("brand"));
+    sideLayout->addWidget(brand);
+    sideLayout->addSpacing(14);
+    const auto addNavButton = [sidebar, sideLayout](const QString& label,
+                                                    const QString& name,
+                                                    QStyle::StandardPixmap icon) {
+        auto* button = new QPushButton(sidebar->style()->standardIcon(icon), label, sidebar);
+        button->setObjectName(name);
+        button->setCheckable(true);
+        button->setFlat(true);
+        button->setMinimumHeight(38);
+        sideLayout->addWidget(button);
+        return button;
+    };
+    auto* libraryNav = addNavButton(QStringLiteral("Library"), QStringLiteral("libraryNav"),
+                                    QStyle::SP_DirHomeIcon);
+    libraryNav->setChecked(true);
+    auto* queueNav = addNavButton(QStringLiteral("Queue"), QStringLiteral("queueNav"),
+                                  QStyle::SP_BrowserReload);
+    auto* settingsNav = addNavButton(QStringLiteral("Settings"), QStringLiteral("settingsNav"),
+                                     QStyle::SP_FileDialogDetailedView);
+    sideLayout->addStretch(1);
+    connect(settingsNav, &QPushButton::clicked, this, [this, settingsNav] {
+        settingsNav->setChecked(true);
+        if (!menuBar()->actions().isEmpty() && menuBar()->actions().front()->menu())
+            menuBar()->actions().front()->menu()->popup(
+                settingsNav->mapToGlobal(QPoint(settingsNav->width(), 0)));
+    });
+    connect(queueNav, &QPushButton::clicked, this, [this] {
+        statusBar()->showMessage(QStringLiteral("No queued operations."));
+    });
+    connect(libraryNav, &QPushButton::clicked, this, [libraryNav, queueNav, settingsNav] {
+        libraryNav->setChecked(true);
+        queueNav->setChecked(false);
+        settingsNav->setChecked(false);
+    });
+    connect(queueNav, &QPushButton::clicked, this, [libraryNav, queueNav, settingsNav] {
+        libraryNav->setChecked(false);
+        queueNav->setChecked(true);
+        settingsNav->setChecked(false);
+    });
+
+    auto* center = new QWidget(shell);
+    center->setObjectName(QStringLiteral("libraryCenter"));
+    auto* centerLayout = new QVBoxLayout(center);
+    centerLayout->setContentsMargins(16, 14, 4, 12);
+    centerLayout->setSpacing(10);
+    auto* toolbar = new QHBoxLayout;
+    toolbar->setSpacing(8);
+    searchField_ = new QLineEdit(center);
+    searchField_->setObjectName(QStringLiteral("gameSearch"));
+    searchField_->setPlaceholderText(QStringLiteral("Search games…"));
+    searchField_->setClearButtonEnabled(true);
+    launcherFilter_ = new QComboBox(center);
+    launcherFilter_->setObjectName(QStringLiteral("launcherFilter"));
+    launcherFilter_->addItem(QStringLiteral("All launchers"));
+    driveFilter_ = new QComboBox(center);
+    driveFilter_->setObjectName(QStringLiteral("driveFilter"));
+    driveFilter_->addItem(QStringLiteral("All drives"));
+    statusFilter_ = new QComboBox(center);
+    statusFilter_->setObjectName(QStringLiteral("statusFilter"));
+    statusFilter_->addItems({QStringLiteral("All games"), QStringLiteral("Compressed"),
+                             QStringLiteral("Uncompressed"), QStringLiteral("Partial")});
+    toolbar->addWidget(searchField_, 1);
+    toolbar->addWidget(launcherFilter_);
+    toolbar->addWidget(driveFilter_);
+    toolbar->addWidget(statusFilter_);
+    auto* refresh = new QPushButton(QStringLiteral("Refresh"), center);
+    refresh->setObjectName(QStringLiteral("libraryRefreshButton"));
+    toolbar->addWidget(refresh);
+    connect(refresh, &QPushButton::clicked, this, [this] { startDirectoryScan(); });
+    centerLayout->addLayout(toolbar);
+
+    auto* stats = new QHBoxLayout;
+    stats->setSpacing(8);
+    const auto addStat = [center, stats](const QString& title, const QString& name) {
+        auto* box = new QFrame(center);
+        box->setObjectName(QStringLiteral("statBox"));
+        auto* boxLayout = new QVBoxLayout(box);
+        boxLayout->setContentsMargins(12, 7, 12, 7);
+        boxLayout->setSpacing(1);
+        auto* value = new QLabel(QStringLiteral("—"), box);
+        value->setObjectName(name);
+        auto* caption = new QLabel(title, box);
+        caption->setObjectName(QStringLiteral("statCaption"));
+        boxLayout->addWidget(value);
+        boxLayout->addWidget(caption);
+        stats->addWidget(box, 1);
+        return value;
+    };
+    gamesStat_ = addStat(QStringLiteral("Games"), QStringLiteral("gamesStat"));
+    totalSizeStat_ = addStat(QStringLiteral("Total size"), QStringLiteral("totalSizeStat"));
+    onDiskStat_ = addStat(QStringLiteral("On disk"), QStringLiteral("onDiskStat"));
+    savedStat_ = addStat(QStringLiteral("Saved"), QStringLiteral("savedStat"));
+    centerLayout->addLayout(stats);
+
+    gameModel_ = new QStandardItemModel(0, 8, this);
+    gameModel_->setHorizontalHeaderLabels({QStringLiteral("Game"), QStringLiteral("Launcher"),
+        QStringLiteral("Drive"), QStringLiteral("Size"), QStringLiteral("On disk"),
+        QStringLiteral("Saved"), QStringLiteral("Status"), QStringLiteral("Action")});
+    gameProxy_ = new QSortFilterProxyModel(this);
+    gameProxy_->setSourceModel(gameModel_);
+    gameProxy_->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    gameProxy_->setFilterKeyColumn(0);
+    gameTable_ = new QTableView(center);
+    gameTable_->setObjectName(QStringLiteral("gameTable"));
+    gameTable_->setModel(gameProxy_);
+    gameTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    gameTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    gameTable_->setAlternatingRowColors(true);
+    gameTable_->setShowGrid(false);
+    gameTable_->verticalHeader()->hide();
+    gameTable_->horizontalHeader()->setStretchLastSection(false);
+    gameTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int column = 1; column < 8; ++column)
+        gameTable_->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    gameTable_->setSortingEnabled(true);
+    centerLayout->addWidget(gameTable_, 1);
+    connect(searchField_, &QLineEdit::textChanged, gameProxy_, &QSortFilterProxyModel::setFilterFixedString);
+    connect(statusFilter_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+        if (gameModel_->rowCount() == 0) return;
+        if (text == QStringLiteral("All games")) gameProxy_->setFilterKeyColumn(0);
+        else gameProxy_->setFilterKeyColumn(6);
+        gameProxy_->setFilterFixedString(text == QStringLiteral("All games")
+                                             ? searchField_->text() : text);
+    });
+    connect(driveFilter_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+        gameProxy_->setFilterKeyColumn(text == QStringLiteral("All drives") ? 0 : 2);
+        gameProxy_->setFilterFixedString(text == QStringLiteral("All drives")
+                                             ? searchField_->text() : text);
+    });
+    connect(gameTable_, &QTableView::doubleClicked, this, [this](const QModelIndex& index) {
+        if (index.column() == 7) {
+            if (compressButton_->isEnabled()) startCompression();
+            else if (restoreButton_->isEnabled()) startRestore();
+        }
+    });
+
+    previousContent->setObjectName(QStringLiteral("gameDetails"));
+    selectedGameName_ = new QLabel(QStringLiteral("No game selected"), previousContent);
+    selectedGameName_->setObjectName(QStringLiteral("selectedGameName"));
+    selectedGameName_->setStyleSheet(QStringLiteral("font-size:20px;font-weight:650;"));
+    selectedLauncher_ = new QLabel(QStringLiteral("Manual folder"), previousContent);
+    selectedLauncher_->setObjectName(QStringLiteral("selectedLauncher"));
+    selectedStatus_ = new QLabel(QStringLiteral("Unknown"), previousContent);
+    selectedStatus_->setObjectName(QStringLiteral("selectedStatus"));
+    previousContent->setMinimumWidth(300);
+    previousContent->setMaximumWidth(380);
+    if (auto* oldLayout = qobject_cast<QVBoxLayout*>(previousContent->layout())) {
+        oldLayout->setContentsMargins(16, 18, 16, 12);
+        oldLayout->setSpacing(9);
+        oldLayout->insertWidget(0, selectedGameName_);
+        oldLayout->insertWidget(1, selectedLauncher_);
+        oldLayout->insertWidget(2, selectedStatus_);
+    }
+    shellLayout->addWidget(sidebar);
+    shellLayout->addWidget(center, 1);
+    shellLayout->addWidget(previousContent);
+    setCentralWidget(shell);
+    setMinimumSize(420, 300);
+    resize(1480, 900);
+    setStyleSheet(QStringLiteral(
+        "QMainWindow,#libraryShell{background:#101417;color:#edf2f6;}"
+        "#sidebar,#gameDetails{background:#12181c;border-right:1px solid #242d33;}"
+        "#brand{font-size:18px;font-weight:650;padding:8px 4px;}"
+        "QPushButton{background:#20282e;border:1px solid #303b43;border-radius:5px;padding:7px 12px;}"
+        "QPushButton:hover{background:#29343b;} QPushButton:checked{background:#123354;border-color:#1479df;}"
+        "QLineEdit,QComboBox{background:#171e23;border:1px solid #303a41;border-radius:5px;padding:7px;color:#edf2f6;}"
+        "QFrame#statBox{background:#171e23;border:1px solid #222c32;border-radius:7px;}"
+        "QLabel#gamesStat,QLabel#totalSizeStat,QLabel#onDiskStat,QLabel#savedStat{font-size:16px;font-weight:600;}"
+        "QLabel#statCaption{color:#aab4bb;font-size:11px;}"
+        "QLabel#selectedGameName{font-size:20px;font-weight:650;}"
+        "QTableView{background:#101518;alternate-background-color:#141b1f;border:1px solid #202a30;"
+        "selection-background-color:#123c62;selection-color:#fff;outline:0;}"
+        "QHeaderView::section{background:#12191d;color:#c5cdd2;border:0;padding:7px 6px;}"
+        "QStatusBar{background:#12181c;color:#aeb9c0;}"));
 
     const QString savedDirectory = settings.value(QStringLiteral("directory/lastSelected"))
                                        .toString();
@@ -564,6 +792,51 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
         : "Unavailable");
     fileCountValue_->setText(locale.toString(static_cast<qulonglong>(result.total_file_count)));
 
+    gameModel_->removeRows(0, gameModel_->rowCount());
+    const QString gameName = QFileInfo(directory).fileName().isEmpty()
+        ? directory : QFileInfo(directory).fileName();
+    std::size_t compressedFiles = 0;
+    for (const auto& file : result.files) {
+        if (file.attributes.compressed) ++compressedFiles;
+    }
+    const QString status = !result.traversal_complete || result.total_file_count == 0
+        ? QStringLiteral("Unknown")
+        : compressedFiles == 0 ? QStringLiteral("Uncompressed")
+                               : QStringLiteral("Unknown");
+    const QString sizeText = result.traversal_complete
+        ? compactBytes(result.total_logical_bytes) : QStringLiteral("—");
+    const QString diskText = result.allocation_measurements_complete
+        ? compactBytes(result.total_allocated_bytes) : QStringLiteral("—");
+    const QString savedText = result.allocation_measurements_complete
+            && result.total_logical_bytes > result.total_allocated_bytes
+        ? compactBytes(result.total_logical_bytes - result.total_allocated_bytes)
+        : QStringLiteral("—");
+    const QString volumeRoot = QDir(directory).rootPath();
+    const QString drive = volumeRoot.size() >= 2 && volumeRoot.at(1) == QLatin1Char(':')
+        ? volumeRoot.left(2).toUpper() : QStringLiteral("—");
+    const QString action = status == QStringLiteral("Uncompressed")
+        ? QStringLiteral("Compress") : QStringLiteral("Analyze");
+    QList<QStandardItem*> row;
+    for (const QString& value : {gameName, QStringLiteral("Manual"), drive, sizeText,
+                                 diskText, savedText, status, action}) {
+        row.push_back(new QStandardItem(value));
+    }
+    row[0]->setToolTip(directory);
+    row[6]->setToolTip(compressedFiles > 0
+        ? QStringLiteral("Windows reports compressed files, but the algorithm is not verified.")
+        : QStringLiteral("No files were reported as compressed by Windows."));
+    gameModel_->appendRow(row);
+    gamesStat_->setText(QStringLiteral("1"));
+    totalSizeStat_->setText(sizeText);
+    onDiskStat_->setText(diskText);
+    savedStat_->setText(savedText);
+    selectedGameName_->setText(gameName);
+    selectedLauncher_->setText(QStringLiteral("Manual folder  ·  %1").arg(drive));
+    selectedStatus_->setText(status);
+    selectedStatus_->setToolTip(row[6]->toolTip());
+    const QModelIndex gameIndex = gameProxy_->index(0, 0);
+    if (gameIndex.isValid()) gameTable_->selectRow(0);
+
     if (result.volume.error) {
         filesystemValue_->setText("Unavailable");
     } else if (result.volume.compression_eligible) {
@@ -600,6 +873,7 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     statusBar()->showMessage(message);
     analyzedDirectoryIsEligible_ = result.volume.compression_eligible
                                    && result.total_file_count > 0;
+    compressButton_->setEnabled(analyzedDirectoryIsEligible_);
     restoreButton_->setEnabled(analyzedDirectoryIsEligible_);
 }
 

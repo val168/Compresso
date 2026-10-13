@@ -19,6 +19,12 @@ class QThread;
 class QCloseEvent;
 class QProgressBar;
 class QTimer;
+class QTableView;
+class QStandardItemModel;
+class QSortFilterProxyModel;
+class QComboBox;
+class QLineEdit;
+class QLabel;
 
 class MainWindow final : public QMainWindow
 {
@@ -77,4 +83,18 @@ private:
     QAction* systemThemeAction_ = nullptr;
     QAction* lightThemeAction_ = nullptr;
     QAction* darkThemeAction_ = nullptr;
+    QTableView* gameTable_ = nullptr;
+    QStandardItemModel* gameModel_ = nullptr;
+    QSortFilterProxyModel* gameProxy_ = nullptr;
+    QLineEdit* searchField_ = nullptr;
+    QComboBox* launcherFilter_ = nullptr;
+    QComboBox* driveFilter_ = nullptr;
+    QComboBox* statusFilter_ = nullptr;
+    QLabel* gamesStat_ = nullptr;
+    QLabel* totalSizeStat_ = nullptr;
+    QLabel* onDiskStat_ = nullptr;
+    QLabel* savedStat_ = nullptr;
+    QLabel* selectedGameName_ = nullptr;
+    QLabel* selectedLauncher_ = nullptr;
+    QLabel* selectedStatus_ = nullptr;
 };

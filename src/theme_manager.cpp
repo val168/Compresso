@@ -35,7 +35,7 @@ ThemeManager::ThemeManager(QApplication& application, QObject* parent)
 {
     QSettings settings;
     preference_ = parsePreference(settings.value(QStringLiteral("appearance/theme"),
-                                                 QStringLiteral("system")).toString());
+                                                 QStringLiteral("dark")).toString());
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(application_.styleHints(), &QStyleHints::colorSchemeChanged,
             this, [this](Qt::ColorScheme) {
