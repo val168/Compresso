@@ -113,7 +113,11 @@ if(BUILD_TESTING)
     target_link_libraries(CompressoUiTests PRIVATE Qt6::Widgets Qt6::Test)
     target_compile_features(CompressoUiTests PRIVATE cxx_std_23)
 
-    add_test(NAME CompressoUiTests COMMAND CompressoUiTests)
+    add_test(NAME CompressoUiTests
+        COMMAND CompressoUiTests
+                -o "${CMAKE_CURRENT_BINARY_DIR}/CompressoUiTests.txt,txt"
+                -v1
+    )
     set_tests_properties(CompressoUiTests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )

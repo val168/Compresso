@@ -42,7 +42,19 @@ jobs:
 
       - name: Run ${{ matrix.preset }} tests
         shell: msys2 {0}
-        run: ctest --test-dir out/build/${{ matrix.preset }} --output-on-failure
+        run: |
+          if ctest --test-dir out/build/${{ matrix.preset }} --output-on-failure; then
+            test_status=0
+          else
+            test_status=$?
+          fi
+          test_log="out/build/${{ matrix.preset }}/CompressoUiTests.txt"
+          if [ -f "$test_log" ]; then
+            cat "$test_log"
+          else
+            echo "QtTest did not create its result log: $test_log"
+          fi
+          exit "$test_status"
 
       - name: Package portable Release
         if: matrix.preset == 'release'
