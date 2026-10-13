@@ -120,6 +120,41 @@ QString compressionReportDetails(const compresso::CompressionReport& report)
     return details.join(QLatin1Char('\n'));
 }
 
+class ScopedWindowsEnvironmentVariable final
+{
+public:
+    ScopedWindowsEnvironmentVariable(const wchar_t* name, const std::wstring& value)
+        : name_(name)
+    {
+        const DWORD required = GetEnvironmentVariableW(name_.c_str(), nullptr, 0);
+        existed_ = required > 0;
+        if (existed_) {
+            std::wstring previous(required, L'\0');
+            const DWORD length = GetEnvironmentVariableW(name_.c_str(), previous.data(), required);
+            if (length < required) {
+                previous.resize(length);
+                previous_ = std::move(previous);
+            } else {
+                existed_ = false;
+            }
+        }
+        SetEnvironmentVariableW(name_.c_str(), value.c_str());
+    }
+
+    ~ScopedWindowsEnvironmentVariable()
+    {
+        SetEnvironmentVariableW(name_.c_str(), existed_ ? previous_.c_str() : nullptr);
+    }
+
+    ScopedWindowsEnvironmentVariable(const ScopedWindowsEnvironmentVariable&) = delete;
+    ScopedWindowsEnvironmentVariable& operator=(const ScopedWindowsEnvironmentVariable&) = delete;
+
+private:
+    std::wstring name_;
+    std::wstring previous_;
+    bool existed_ = false;
+};
+
 } // namespace
 
 class MainWindowTests final : public QObject
@@ -1595,6 +1630,53 @@ private slots:
         QCOMPARE(report.rejection_reason,
                  QStringLiteral("Windows and protected system locations are excluded."));
         QVERIFY(report.files.empty());
+    }
+
+    void compressionAllowsGameFoldersInProgramFilesButRejectsWindowsApps()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const std::filesystem::path programFiles =
+            std::filesystem::path(temporaryDirectory.path().toStdWString())
+            / L"Program Files (x86)";
+        const std::filesystem::path gameDirectory =
+            programFiles / L"Steam" / L"steamapps" / L"common" / L"Skyrim Special Edition";
+        const std::filesystem::path windowsApps = programFiles / L"WindowsApps";
+        std::error_code filesystemError;
+        std::filesystem::create_directories(gameDirectory, filesystemError);
+        QVERIFY(!filesystemError);
+        std::filesystem::create_directories(windowsApps, filesystemError);
+        QVERIFY(!filesystemError);
+        {
+            ScopedWindowsEnvironmentVariable programFilesOverride(
+                L"ProgramFiles(x86)", programFiles.native());
+            std::ofstream file(gameDirectory / L"game.bin", std::ios::binary);
+            file << "disposable test data";
+            file.close();
+
+            std::size_t attempts = 0;
+            const auto gameReport = compresso::CompressionBackend::compressDirectory(
+                gameDirectory, {}, [&attempts](const auto&, const auto&, std::stop_token) {
+                    ++attempts;
+                    compresso::CompactProcessResult result;
+                    result.started = true;
+                    result.finished = true;
+                    result.exit_code = 1;
+                    result.error_message = "simulated failure";
+                    return result;
+                });
+            if (!gameReport.target_eligible) {
+                QSKIP(qPrintable("Temporary directory is not on a supported local NTFS volume: "
+                                 + gameReport.rejection_reason));
+            }
+            QCOMPARE(attempts, std::size_t{1});
+
+            const auto windowsAppsReport = compresso::CompressionBackend::compressDirectory(
+                windowsApps);
+            QVERIFY(!windowsAppsReport.target_eligible);
+            QCOMPARE(windowsAppsReport.rejection_reason,
+                     QStringLiteral("Windows and protected system locations are excluded."));
+        }
     }
 };
 

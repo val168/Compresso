@@ -550,16 +550,27 @@ compresso::CompressionReport runDirectoryOperation(
         return report;
     }
 
+    const std::filesystem::path programFiles = environmentPath(L"ProgramFiles");
+    const std::filesystem::path programFilesX86 = environmentPath(L"ProgramFiles(x86)");
+    if ((!programFiles.empty() && pathsAreEqual(canonicalDirectory, programFiles))
+        || (!programFilesX86.empty() && pathsAreEqual(canonicalDirectory, programFilesX86))) {
+        reject(report, OperationErrorCode::unsafe_target,
+               "Choose an application or game folder, not the Program Files root.");
+        return report;
+    }
+
     const std::array<std::filesystem::path, 9> protectedDirectories{
         getSystemDirectory(GetWindowsDirectoryW),
         getSystemDirectory(GetSystemDirectoryW),
         getSystemDirectory(GetSystemWindowsDirectoryW),
-        environmentPath(L"ProgramFiles"),
-        environmentPath(L"ProgramFiles(x86)"),
         environmentPath(L"ProgramData"),
         std::filesystem::path(volumeRoot) / L"System Volume Information",
         std::filesystem::path(volumeRoot) / L"$Recycle.Bin",
-        std::filesystem::path(volumeRoot) / L"Recovery"};
+        std::filesystem::path(volumeRoot) / L"Recovery",
+        programFiles.empty() ? std::filesystem::path{}
+                             : programFiles / L"WindowsApps",
+        programFilesX86.empty() ? std::filesystem::path{}
+                                : programFilesX86 / L"WindowsApps"};
     for (const auto& protectedDirectory : protectedDirectories) {
         if (!protectedDirectory.empty() && pathIsSameOrChild(canonicalDirectory,
                                                               protectedDirectory)) {
