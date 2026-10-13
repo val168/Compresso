@@ -50,7 +50,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
     *(separator + 1) = L'\0';
 
-    constexpr wchar_t kApplicationRelativePath[] = L"..\\dependencies\\CompressoApp.exe";
+    constexpr wchar_t kApplicationRelativePath[] = L"dependencies\\CompressoApp.exe";
     const DWORD directoryLength = static_cast<DWORD>(separator + 1 - appPath);
     constexpr DWORD applicationPathLength =
         static_cast<DWORD>(sizeof(kApplicationRelativePath) / sizeof(wchar_t) - 1);

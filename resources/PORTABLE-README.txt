@@ -1,7 +1,7 @@
 Compresso Portable
 ==================
 
-Run bin\Compresso.exe. It starts the Qt application in the dependencies folder,
+Run Compresso.exe. It starts the Qt application in the dependencies folder,
 which keeps its runtime DLLs together. The share folder contains Qt platform
 plugins. No installer or administrator privileges are needed for ordinary use.
 Windows may deny operations on protected or inaccessible game files; Compresso

@@ -55,7 +55,7 @@ target_compile_features(CompressoLauncher PRIVATE cxx_std_23)
 target_link_options(CompressoLauncher PRIVATE -municode -static -static-libgcc -static-libstdc++)
 set_target_properties(CompressoLauncher PROPERTIES OUTPUT_NAME Compresso)
 
-install(TARGETS CompressoLauncher RUNTIME DESTINATION bin)
+install(TARGETS CompressoLauncher RUNTIME DESTINATION .)
 install(TARGETS Compresso RUNTIME DESTINATION dependencies)
 install(FILES LICENSE resources/PORTABLE-README.txt DESTINATION .)
 
