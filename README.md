@@ -77,7 +77,7 @@ ctest --test-dir out/build/release --output-on-failure
 cmake --build --preset release --target package-portable
 ```
 
-The package target installs the executable, Qt deployment files, and required runtime DLLs to `out/build/release/portable/Compresso/`, then creates `Compresso-1.0.0-windows-x64.zip` in the `portable/` directory. Extract the ZIP and run `Compresso/bin/Compresso.exe`. For an unpackaged Debug build, run `out/build/debug/Compresso.exe` from the UCRT64 terminal so Qt and MinGW runtime DLLs are on `PATH`.
+The ordinary CMake build output is not self-contained: both Debug and Release executables need the Qt and MinGW runtime environment used to build them. The package target installs the Release executable, Qt deployment files, and required runtime DLLs to `out/build/release/portable/Compresso/`, then creates `Compresso-1.0.0-windows-x64.zip` in the `portable/` directory. For a standalone app, extract that ZIP and run `Compresso/bin/Compresso.exe`; do not launch `out/build/release/Compresso.exe` directly on a clean Windows installation. For development, run either unpackaged executable from the MSYS2 UCRT64 terminal so Qt and MinGW runtime DLLs are on `PATH`.
 
 GitHub Actions builds and tests Debug and Release on Windows. Its Release job also packages the portable ZIP, launches the extracted application with Qt and MSYS2 removed from `PATH`, and uploads the ZIP as a workflow artifact.
 
