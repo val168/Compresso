@@ -264,6 +264,10 @@ compresso::ScanResult compresso::DirectoryScanner::scan(const std::filesystem::p
                         issue.technical_details = allocationError.message();
                         result.errors.push_back(std::move(issue));
                     }
+                    scannedFile.compression_state = inspectFileCompressionState(
+                        entryPath, metadata.attributes.compressed,
+                        !scannedFile.allocated_size_available
+                            || allocatedSize < fileSize);
 
                     result.files.push_back(std::move(scannedFile));
                     result.total_logical_bytes += fileSize;

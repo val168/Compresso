@@ -20,6 +20,7 @@
 #include <QPlainTextEdit>
 #include <QStatusBar>
 #include <QScreen>
+#include <QTableView>
 #include <QSettings>
 #include <QSize>
 #include <QStringList>
@@ -982,6 +983,9 @@ private slots:
             std::filesystem::path(gameDirectory.toStdWString()));
         QVERIFY(beforeScan.allocation_measurements_complete);
         QVERIFY(beforeScan.traversal_complete);
+        QCOMPARE(beforeScan.files.size(), std::size_t{1});
+        QCOMPARE(beforeScan.files.front().compression_state,
+                 compresso::FileCompressionState::uncompressed);
         if (!beforeScan.volume.compression_eligible) {
             QSKIP("Temporary directory is not on a supported local NTFS volume.");
         }
@@ -1004,6 +1008,11 @@ private slots:
         QCOMPARE(report.size_summary->original_allocated_bytes,
                  beforeScan.total_allocated_bytes);
         QCOMPARE(report.files.front().exit_code, 0);
+        const auto compressedScan = compresso::DirectoryScanner::scan(
+            std::filesystem::path(gameDirectory.toStdWString()));
+        QCOMPARE(compressedScan.files.size(), std::size_t{1});
+        QCOMPARE(compressedScan.files.front().compression_state,
+                 compresso::FileCompressionState::lzx_compressed);
         QVERIFY(!report.files.front().standard_output.isEmpty()
                 || !report.files.front().standard_error.isEmpty());
         QVERIFY(progressUpdates.size() >= std::size_t{3});
@@ -1077,6 +1086,11 @@ private slots:
         QCOMPARE(restoreReport.failedCount(), std::size_t{0});
         QCOMPARE(restoreReport.skippedCount(), std::size_t{0});
         QCOMPARE(restoreReport.files.front().exit_code, 0);
+        const auto restoredScan = compresso::DirectoryScanner::scan(
+            std::filesystem::path(gameDirectory.toStdWString()));
+        QCOMPARE(restoredScan.files.size(), std::size_t{1});
+        QCOMPARE(restoredScan.files.front().compression_state,
+                 compresso::FileCompressionState::uncompressed);
         QFile afterRestoration(filePath);
         QVERIFY(afterRestoration.open(QIODevice::ReadOnly));
         QCOMPARE(afterRestoration.readAll(), contents);
@@ -1113,12 +1127,16 @@ private slots:
         auto* status = window.findChild<QStatusBar*>("operationStatus");
         auto* originalValue = window.findChild<QLabel*>("originalSizeValue");
         auto* finalValue = window.findChild<QLabel*>("compressedSizeValue");
+        auto* selectedStatus = window.findChild<QLabel*>("selectedStatus");
+        auto* gameTable = window.findChild<QTableView*>("gameTable");
         QVERIFY(pathField);
         QVERIFY(analyze);
         QVERIFY(compress);
         QVERIFY(status);
         QVERIFY(originalValue);
         QVERIFY(finalValue);
+        QVERIFY(selectedStatus);
+        QVERIFY(gameTable);
 
         pathField->setText(gameDirectory);
         QTest::keyClick(pathField, Qt::Key_Return);
@@ -1129,17 +1147,14 @@ private slots:
         if (!compress->isEnabled()) {
             QSKIP("Temporary directory is not on a supported local NTFS volume.");
         }
+        QCOMPARE(selectedStatus->text(), QStringLiteral("Uncompressed"));
 
         const auto beforeScan = compresso::DirectoryScanner::scan(
             std::filesystem::path(gameDirectory.toStdWString()));
         QVERIFY(beforeScan.traversal_complete);
         QVERIFY(beforeScan.allocation_measurements_complete);
         QTest::mouseClick(compress, Qt::LeftButton);
-        QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().startsWith("LZX:"), 20000);
-        QVERIFY2(status->currentMessage().contains("compressed, 0 skipped, 0 failed")
-                     && (status->currentMessage().contains("Saved")
-                         || status->currentMessage().contains("increased by")),
-                 qPrintable(status->currentMessage()));
+        QTRY_COMPARE_WITH_TIMEOUT(selectedStatus->text(), QStringLiteral("Compressed"), 30000);
 
         const auto afterScan = compresso::DirectoryScanner::scan(
             std::filesystem::path(gameDirectory.toStdWString()));
@@ -1151,7 +1166,11 @@ private slots:
         QCOMPARE(finalValue->text(),
                  QLocale().toString(static_cast<qulonglong>(afterScan.total_allocated_bytes))
                      + " bytes");
-        QVERIFY(status->currentMessage().contains("0 failed"));
+        QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().startsWith("Scan complete:"), 20000);
+        QCOMPARE(selectedStatus->text(), QStringLiteral("Compressed"));
+        QCOMPARE(gameTable->model()->index(0, 6).data().toString(),
+                 QStringLiteral("Compressed"));
+        QCOMPARE(gameTable->model()->index(0, 7).data().toString(), QStringLiteral("Restore"));
     }
 
     void restorationSkipsNonLzxFiles()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compresso/operation_error.h"
+#include "compresso/filesystem_compression.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +33,7 @@ struct ScannedFile
     std::uintmax_t allocated_size_bytes = 0;
     bool allocated_size_available = false;
     FileAttributes attributes;
+    FileCompressionState compression_state = FileCompressionState::unknown;
 };
 
 struct VolumeInfo

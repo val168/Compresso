@@ -131,4 +131,5 @@ private:
     std::vector<QueueTask> queueTasks_;
     bool queueRunning_ = false;
     int activeQueueTask_ = -1;
+    QString pendingRefreshPath_;
 };

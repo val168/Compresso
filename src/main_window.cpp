@@ -126,6 +126,39 @@ QString compactBytes(std::uintmax_t bytes)
         .arg(QString::fromLatin1(units[unit]));
 }
 
+QIcon navigationIcon(int symbol)
+{
+    QPixmap image(20, 20);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor(QStringLiteral("#d8e0e8")), 1.6,
+                        Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    if (symbol == 0) {
+        painter.drawRoundedRect(QRectF(3.5, 3.5, 5.5, 5.5), 1.0, 1.0);
+        painter.drawRoundedRect(QRectF(11.0, 3.5, 5.5, 5.5), 1.0, 1.0);
+        painter.drawRoundedRect(QRectF(3.5, 11.0, 5.5, 5.5), 1.0, 1.0);
+        painter.drawRoundedRect(QRectF(11.0, 11.0, 5.5, 5.5), 1.0, 1.0);
+    } else if (symbol == 1) {
+        for (int y : {5, 10, 15}) {
+            painter.drawEllipse(QPointF(4.5, y), 1.1, 1.1);
+            painter.drawLine(QPointF(8.0, y), QPointF(17.0, y));
+        }
+    } else {
+        painter.drawEllipse(QPointF(10.0, 10.0), 3.1, 3.1);
+        for (int angle = 0; angle < 360; angle += 45) {
+            painter.save();
+            painter.translate(10.0, 10.0);
+            painter.rotate(angle);
+            painter.drawLine(QPointF(0.0, -5.0), QPointF(0.0, -7.2));
+            painter.restore();
+        }
+        painter.drawEllipse(QPointF(10.0, 10.0), 7.0, 7.0);
+    }
+    return QIcon(image);
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -342,14 +375,13 @@ MainWindow::MainWindow(QWidget* parent)
     auto* sideLayout = new QVBoxLayout(sidebar);
     sideLayout->setContentsMargins(12, 14, 12, 12);
     sideLayout->setSpacing(8);
-    auto* brand = new QLabel(QStringLiteral("◈  Compresso"), sidebar);
+    auto* brand = new QLabel(QStringLiteral("Compresso"), sidebar);
     brand->setObjectName(QStringLiteral("brand"));
     sideLayout->addWidget(brand);
     sideLayout->addSpacing(14);
     const auto addNavButton = [sidebar, sideLayout](const QString& label,
-                                                    const QString& name,
-                                                    QStyle::StandardPixmap icon) {
-        auto* button = new QPushButton(sidebar->style()->standardIcon(icon), label, sidebar);
+                                                    const QString& name, int symbol) {
+        auto* button = new QPushButton(navigationIcon(symbol), label, sidebar);
         button->setObjectName(name);
         button->setCheckable(true);
         button->setFlat(true);
@@ -357,13 +389,10 @@ MainWindow::MainWindow(QWidget* parent)
         sideLayout->addWidget(button);
         return button;
     };
-    auto* libraryNav = addNavButton(QStringLiteral("Library"), QStringLiteral("libraryNav"),
-                                    QStyle::SP_DirHomeIcon);
+    auto* libraryNav = addNavButton(QStringLiteral("Library"), QStringLiteral("libraryNav"), 0);
     libraryNav->setChecked(true);
-    auto* queueNav = addNavButton(QStringLiteral("Queue"), QStringLiteral("queueNav"),
-                                  QStyle::SP_BrowserReload);
-    auto* settingsNav = addNavButton(QStringLiteral("Settings"), QStringLiteral("settingsNav"),
-                                     QStyle::SP_FileDialogDetailedView);
+    auto* queueNav = addNavButton(QStringLiteral("Queue"), QStringLiteral("queueNav"), 1);
+    auto* settingsNav = addNavButton(QStringLiteral("Settings"), QStringLiteral("settingsNav"), 2);
     sideLayout->addStretch(1);
     connect(settingsNav, &QPushButton::clicked, this, [this, settingsNav] {
         settingsNav->setChecked(true);
@@ -755,6 +784,10 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
     connect(worker, &compresso::OperationWorker::compressionCompleted, this,
             [this, directory](const compresso::CompressionReport& result) {
                 progressTimer_->stop();
+                if (result.target_eligible
+                    && (result.compressedCount() > 0 || result.failedCount() > 0)) {
+                    pendingRefreshPath_ = directory;
+                }
                 if (activeQueueTask_ >= 0) {
                     const QString state = result.cancelled ? QStringLiteral("Cancelled")
                         : (!result.target_eligible || result.failedCount() > 0)
@@ -767,6 +800,10 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
     connect(worker, &compresso::OperationWorker::restorationCompleted, this,
             [this, directory](const compresso::CompressionReport& result) {
                 progressTimer_->stop();
+                if (result.target_eligible
+                    && (result.restoredCount() > 0 || result.failedCount() > 0)) {
+                    pendingRefreshPath_ = directory;
+                }
                 if (activeQueueTask_ >= 0) {
                     const QString state = result.cancelled ? QStringLiteral("Cancelled")
                         : (!result.target_eligible || result.failedCount() > 0)
@@ -792,14 +829,24 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
         setOperationControlsEnabled(true);
         cancelButton_->hide();
         progressBar_->hide();
-        if (activeQueueTask_ >= 0) {
-            activeQueueTask_ = -1;
-            if (queueRunning_) QTimer::singleShot(0, this, [this] { startNextQueueTask(); });
-            else startQueueButton_->setEnabled(true);
-        }
+        const bool finishedQueueTask = activeQueueTask_ >= 0;
+        if (finishedQueueTask) activeQueueTask_ = -1;
         if (closeAfterOperation_) {
             closeAfterOperation_ = false;
             QMetaObject::invokeMethod(this, &QWidget::close, Qt::QueuedConnection);
+            return;
+        }
+        if (!pendingRefreshPath_.isEmpty()) {
+            const QString refreshPath = std::exchange(pendingRefreshPath_, {});
+            QTimer::singleShot(0, this, [this, refreshPath] {
+                startOperation(compresso::OperationWorker::Kind::scan, refreshPath);
+            });
+            return;
+        }
+        if (queueRunning_) {
+            QTimer::singleShot(0, this, [this] { startNextQueueTask(); });
+        } else if (finishedQueueTask) {
+            startQueueButton_->setEnabled(true);
         }
     });
 
@@ -961,11 +1008,11 @@ void MainWindow::startDirectoryScan()
 void MainWindow::displayScanResult(const compresso::ScanResult& result,
                                    const QString& directory)
 {
-    if (directory != directoryPath_->text() || directory != validatedDirectory_) {
-        return;
-    }
+    const bool updateSelectedGame = directory == directoryPath_->text()
+                                    && directory == validatedDirectory_;
 
     if (result.cancelled) {
+        if (!updateSelectedGame) return;
         originalSizeValue_->setText("\u2014");
         compressedSizeValue_->setText("\u2014");
         fileCountValue_->setText("\u2014");
@@ -982,15 +1029,7 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
         return;
     }
 
-    originalSizeLabel_->setText("Original size (logical)");
-    compressedSizeLabel_->setText("Allocated size (on disk)");
     const QLocale locale;
-    originalSizeValue_->setText(
-        locale.toString(static_cast<qulonglong>(result.total_logical_bytes)) + " bytes");
-    compressedSizeValue_->setText(result.allocation_measurements_complete
-        ? locale.toString(static_cast<qulonglong>(result.total_allocated_bytes)) + " bytes"
-        : "Unavailable");
-    fileCountValue_->setText(locale.toString(static_cast<qulonglong>(result.total_file_count)));
 
     int modelRow = -1;
     for (int candidate = 0; candidate < gameModel_->rowCount(); ++candidate) {
@@ -1013,14 +1052,44 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
         gameModel_->appendRow(newRow);
         gameModel_->item(modelRow, 0)->setData(directory, Qt::UserRole);
     }
-    std::size_t compressedFiles = 0;
+    std::size_t eligibleFiles = 0;
+    std::size_t lzxFiles = 0;
+    std::size_t otherCompressedFiles = 0;
+    std::size_t unknownCompressionFiles = 0;
     for (const auto& file : result.files) {
-        if (file.attributes.compressed) ++compressedFiles;
+        if (file.attributes.encrypted || file.attributes.sparse) continue;
+        ++eligibleFiles;
+        switch (file.compression_state) {
+        case compresso::FileCompressionState::unknown:
+            ++unknownCompressionFiles;
+            break;
+        case compresso::FileCompressionState::uncompressed:
+            break;
+        case compresso::FileCompressionState::lzx_compressed:
+            ++lzxFiles;
+            break;
+        case compresso::FileCompressionState::other:
+            ++otherCompressedFiles;
+            break;
+        }
     }
-    const QString status = !result.traversal_complete || result.total_file_count == 0
-        ? QStringLiteral("Unknown")
-        : compressedFiles == 0 ? QStringLiteral("Uncompressed")
-                               : QStringLiteral("Unknown");
+    QString status = QStringLiteral("Unknown");
+    if (result.volume.error) {
+        status = QStringLiteral("Unknown");
+    } else if (!result.volume.compression_eligible) {
+        status = QStringLiteral("Unsupported");
+    } else if (!result.traversal_complete || eligibleFiles == 0
+               || unknownCompressionFiles > 0) {
+        status = QStringLiteral("Unknown");
+    } else if (otherCompressedFiles > 0) {
+        status = QStringLiteral("Other");
+    } else if (lzxFiles == eligibleFiles) {
+        status = QStringLiteral("Compressed");
+    } else if (lzxFiles == 0) {
+        status = QStringLiteral("Uncompressed");
+    } else {
+        status = QStringLiteral("Partial");
+    }
     const QString sizeText = result.traversal_complete
         ? compactBytes(result.total_logical_bytes) : QStringLiteral("—");
     const QString diskText = result.allocation_measurements_complete
@@ -1032,8 +1101,12 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     const QString volumeRoot = QDir(directory).rootPath();
     const QString drive = volumeRoot.size() >= 2 && volumeRoot.at(1) == QLatin1Char(':')
         ? volumeRoot.left(2).toUpper() : QStringLiteral("—");
-    const QString action = status == QStringLiteral("Uncompressed")
-        ? QStringLiteral("Compress") : QStringLiteral("Analyze");
+    const bool canCompress = status == QStringLiteral("Uncompressed")
+                             || status == QStringLiteral("Partial");
+    const bool canRestore = status == QStringLiteral("Compressed")
+                            || status == QStringLiteral("Partial");
+    const QString action = canCompress ? QStringLiteral("Compress")
+        : canRestore ? QStringLiteral("Restore") : QStringLiteral("Analyze");
     const QStringList values{gameName, launcher, drive, sizeText,
                              diskText, savedText, status, action};
     for (int column = 0; column < values.size(); ++column)
@@ -1043,32 +1116,47 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     if (gameItem->icon().isNull())
         gameItem->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
     gameItem->setToolTip(directory);
-    gameModel_->item(modelRow, 6)->setToolTip(compressedFiles > 0
-        ? QStringLiteral("Windows reports compressed files, but the algorithm is not verified.")
-        : QStringLiteral("No files were reported as compressed by Windows."));
+    QString statusDetails = QStringLiteral("LZX: %1; other: %2; eligible: %3; unknown: %4")
+        .arg(static_cast<qulonglong>(lzxFiles))
+        .arg(static_cast<qulonglong>(otherCompressedFiles))
+        .arg(static_cast<qulonglong>(eligibleFiles))
+        .arg(static_cast<qulonglong>(unknownCompressionFiles));
+    gameModel_->item(modelRow, 6)->setToolTip(statusDetails);
     gameModel_->item(modelRow, 8)->setText(
         QStringList{gameName, launcher, drive, status, directory}.join(QLatin1Char(' ')));
     gamesStat_->setText(QString::number(gameModel_->rowCount()));
-    totalSizeStat_->setText(gameModel_->rowCount() == 1 ? sizeText : QStringLiteral("—"));
-    onDiskStat_->setText(gameModel_->rowCount() == 1 ? diskText : QStringLiteral("—"));
-    savedStat_->setText(gameModel_->rowCount() == 1 ? savedText : QStringLiteral("—"));
-    selectedGameName_->setText(gameName);
-    selectedLauncher_->setText(QStringLiteral("%1  ·  %2").arg(launcher, drive));
-    selectedStatus_->setText(status);
-    selectedStatus_->setToolTip(gameModel_->item(modelRow, 6)->toolTip());
     const QModelIndex gameIndex = gameProxy_->mapFromSource(gameModel_->index(modelRow, 0));
-    if (gameIndex.isValid()) gameTable_->selectRow(gameIndex.row());
+    if (updateSelectedGame) {
+        originalSizeLabel_->setText("Original size (logical)");
+        compressedSizeLabel_->setText("Allocated size (on disk)");
+        originalSizeValue_->setText(
+            locale.toString(static_cast<qulonglong>(result.total_logical_bytes)) + " bytes");
+        compressedSizeValue_->setText(result.allocation_measurements_complete
+            ? locale.toString(static_cast<qulonglong>(result.total_allocated_bytes)) + " bytes"
+            : "Unavailable");
+        fileCountValue_->setText(
+            locale.toString(static_cast<qulonglong>(result.total_file_count)));
+        totalSizeStat_->setText(gameModel_->rowCount() == 1 ? sizeText : QStringLiteral("—"));
+        onDiskStat_->setText(gameModel_->rowCount() == 1 ? diskText : QStringLiteral("—"));
+        savedStat_->setText(gameModel_->rowCount() == 1 ? savedText : QStringLiteral("—"));
+        selectedGameName_->setText(gameName);
+        selectedLauncher_->setText(QStringLiteral("%1  ·  %2").arg(launcher, drive));
+        selectedStatus_->setText(status);
+        selectedStatus_->setToolTip(statusDetails);
+        if (gameIndex.isValid()) gameTable_->selectRow(gameIndex.row());
 
-    if (result.volume.error) {
-        filesystemValue_->setText("Unavailable");
-    } else if (result.volume.compression_eligible) {
-        filesystemValue_->setText(QString::fromStdWString(result.volume.filesystem_type)
-                                  + " (LZX eligible)");
-    } else {
-        filesystemValue_->setText(QString::fromStdWString(result.volume.filesystem_type)
-                                  + " (LZX unavailable)");
+        if (result.volume.error) {
+            filesystemValue_->setText("Unavailable");
+        } else if (result.volume.compression_eligible) {
+            filesystemValue_->setText(QString::fromStdWString(result.volume.filesystem_type)
+                                      + " (LZX eligible)");
+        } else {
+            filesystemValue_->setText(QString::fromStdWString(result.volume.filesystem_type)
+                                      + " (LZX unavailable)");
+        }
     }
 
+    if (!updateSelectedGame) return;
     QString message = result.traversal_complete ? "Scan complete: " : "Scan incomplete: ";
     message += locale.toString(static_cast<qulonglong>(result.total_file_count)) + " files";
     if (!result.skipped_entries.empty()) {
@@ -1094,9 +1182,9 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     if (!diagnosticLines_.isEmpty()) message += " See Details.";
     statusBar()->showMessage(message);
     analyzedDirectoryIsEligible_ = result.volume.compression_eligible
-                                   && result.total_file_count > 0;
-    compressButton_->setEnabled(analyzedDirectoryIsEligible_);
-    restoreButton_->setEnabled(analyzedDirectoryIsEligible_);
+                                   && eligibleFiles > 0;
+    compressButton_->setEnabled(analyzedDirectoryIsEligible_ && canCompress);
+    restoreButton_->setEnabled(analyzedDirectoryIsEligible_ && canRestore);
 }
 
 void MainWindow::displayDiscoveredGames(const QList<compresso::GameInstallation>& games)

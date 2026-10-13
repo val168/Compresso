@@ -22,6 +22,7 @@ add_executable(Compresso WIN32
     src/operation_error.cpp
     src/compression_summary.cpp
     src/compression_backend.cpp
+    src/filesystem_compression.cpp
     src/directory_validator.cpp
     src/directory_scanner.cpp
     src/operation_worker.cpp
@@ -32,6 +33,7 @@ add_executable(Compresso WIN32
     include/compresso/operation_error.h
     include/compresso/compression_summary.h
     include/compresso/compression_backend.h
+    include/compresso/filesystem_compression.h
     include/compresso/directory_scanner.h
     include/compresso/operation_worker.h
     include/compresso/game_discovery.h
@@ -97,6 +99,7 @@ if(BUILD_TESTING)
         src/operation_error.cpp
         src/compression_summary.cpp
         src/compression_backend.cpp
+        src/filesystem_compression.cpp
         src/directory_validator.cpp
         src/directory_scanner.cpp
         src/operation_worker.cpp
@@ -107,6 +110,7 @@ if(BUILD_TESTING)
         include/compresso/operation_error.h
         include/compresso/compression_summary.h
         include/compresso/compression_backend.h
+        include/compresso/filesystem_compression.h
         include/compresso/directory_scanner.h
         include/compresso/operation_worker.h
         include/compresso/game_discovery.h

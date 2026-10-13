@@ -1,6 +1,7 @@
 #include "compresso/compression_backend.h"
 
 #include "compresso/directory_scanner.h"
+#include "compresso/filesystem_compression.h"
 
 #include <QProcess>
 #include <QCryptographicHash>
@@ -8,7 +9,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <chrono>
 #include <string>
 #include <system_error>
@@ -159,67 +159,6 @@ bool sameFileIdentityAndSize(const FileStamp& left, const FileStamp& right)
     return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber
            && a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow
            && a.nFileSizeHigh == b.nFileSizeHigh && a.nFileSizeLow == b.nFileSizeLow;
-}
-
-enum class WofBackingState
-{
-    lzx_compressed,
-    other_external_provider,
-    physical_file,
-    unavailable
-};
-
-constexpr ULONG wofProviderWim = 1;
-constexpr ULONG wofProviderFile = 2;
-constexpr ULONG fileProviderCompressionLzx = 1;
-
-struct WofCompressionInfo
-{
-    ULONG algorithm;
-    ULONG flags;
-};
-
-using WofIsExternalFileFunction = HRESULT(WINAPI*)(LPCWSTR, PBOOL, PULONG, PVOID, PULONG);
-
-WofBackingState wofBackingState(const std::filesystem::path& path)
-{
-    static const HMODULE wofModule = LoadLibraryExW(
-        L"wofutil.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (wofModule == nullptr) {
-        return WofBackingState::unavailable;
-    }
-    const FARPROC functionAddress = GetProcAddress(wofModule, "WofIsExternalFile");
-    static_assert(sizeof(functionAddress) == sizeof(WofIsExternalFileFunction));
-    const auto inspect = std::bit_cast<WofIsExternalFileFunction>(functionAddress);
-    if (inspect == nullptr) {
-        return WofBackingState::unavailable;
-    }
-
-    BOOL external = FALSE;
-    ULONG provider = 0;
-    WofCompressionInfo info{};
-    ULONG infoLength = sizeof(info);
-    const HRESULT result = inspect(path.c_str(), &external, &provider, &info, &infoLength);
-    if (FAILED(result)) {
-        return WofBackingState::unavailable;
-    }
-    if (external == FALSE) {
-        return WofBackingState::physical_file;
-    }
-    if (provider != wofProviderFile && provider != wofProviderWim) {
-        return WofBackingState::other_external_provider;
-    }
-    if (provider == wofProviderWim) {
-        return WofBackingState::other_external_provider;
-    }
-    if (infoLength < sizeof(info)) {
-        return WofBackingState::unavailable;
-    }
-
-    if (info.algorithm == fileProviderCompressionLzx) {
-        return WofBackingState::lzx_compressed;
-    }
-    return WofBackingState::other_external_provider;
 }
 
 QByteArray fileDigest(const std::filesystem::path& path)
@@ -683,7 +622,7 @@ compresso::CompressionReport runDirectoryOperation(
         }
 
         if (restoring) {
-            const WofBackingState backingState = wofBackingState(filePath);
+            const WofBackingState backingState = inspectWofBackingState(filePath);
             if (backingState == WofBackingState::unavailable) {
                 appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
                                      "Windows could not verify the file's LZX algorithm."),
@@ -697,7 +636,7 @@ compresso::CompressionReport runDirectoryOperation(
                 continue;
             }
         } else {
-            const WofBackingState backingState = wofBackingState(filePath);
+            const WofBackingState backingState = inspectWofBackingState(filePath);
             if (backingState == WofBackingState::unavailable) {
                 appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
                                      "Windows could not verify the file's compression provider."),
@@ -846,7 +785,7 @@ compresso::CompressionReport runDirectoryOperation(
         }
 
         if (restoring) {
-            const WofBackingState finalBackingState = wofBackingState(filePath);
+            const WofBackingState finalBackingState = inspectWofBackingState(filePath);
             if (finalBackingState == WofBackingState::unavailable) {
                 fileResult.state = CompressionFileState::failed;
                 setFileError(fileResult, OperationErrorCode::verification_failed,
@@ -868,7 +807,7 @@ compresso::CompressionReport runDirectoryOperation(
             continue;
         }
 
-        const WofBackingState finalBackingState = wofBackingState(filePath);
+        const WofBackingState finalBackingState = inspectWofBackingState(filePath);
         if (finalBackingState == WofBackingState::unavailable) {
             fileResult.state = CompressionFileState::failed;
             setFileError(fileResult, OperationErrorCode::verification_failed,
