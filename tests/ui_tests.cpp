@@ -1022,6 +1022,9 @@ private slots:
         QCOMPARE(compressedScan.files.size(), std::size_t{1});
         QCOMPARE(compressedScan.files.front().compression_state,
                  compresso::FileCompressionState::lzx_compressed);
+        QCOMPARE(compresso::inspectFileCompressionState(
+                     std::filesystem::path(filePath.toStdWString()), false, false),
+                 compresso::FileCompressionState::lzx_compressed);
         QVERIFY(!report.files.front().standard_output.isEmpty()
                 || !report.files.front().standard_error.isEmpty());
         QVERIFY(progressUpdates.size() >= std::size_t{3});

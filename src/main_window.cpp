@@ -1033,6 +1033,7 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     std::size_t eligibleFiles = 0;
     std::size_t lzxFiles = 0;
     std::size_t otherCompressedFiles = 0;
+    std::size_t uncompressedFiles = 0;
     std::size_t unknownCompressionFiles = 0;
     for (const auto& file : result.files) {
         if (file.attributes.encrypted || file.attributes.sparse) continue;
@@ -1042,6 +1043,7 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
             ++unknownCompressionFiles;
             break;
         case compresso::FileCompressionState::uncompressed:
+            ++uncompressedFiles;
             break;
         case compresso::FileCompressionState::lzx_compressed:
             ++lzxFiles;
@@ -1094,8 +1096,10 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     if (gameItem->icon().isNull())
         gameItem->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
     gameItem->setToolTip(directory);
-    QString statusDetails = QStringLiteral("LZX: %1; other: %2; eligible: %3; unknown: %4")
+    QString statusDetails = QStringLiteral(
+        "LZX: %1; uncompressed: %2; other: %3; eligible: %4; unknown: %5")
         .arg(static_cast<qulonglong>(lzxFiles))
+        .arg(static_cast<qulonglong>(uncompressedFiles))
         .arg(static_cast<qulonglong>(otherCompressedFiles))
         .arg(static_cast<qulonglong>(eligibleFiles))
         .arg(static_cast<qulonglong>(unknownCompressionFiles));

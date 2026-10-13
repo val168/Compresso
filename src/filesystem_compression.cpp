@@ -54,9 +54,9 @@ compresso::FileCompressionState compresso::inspectFileCompressionState(
     const std::filesystem::path& path, bool ntfsCompressedAttribute,
     bool allocationSuggestsCompression)
 {
-    if (!ntfsCompressedAttribute && !allocationSuggestsCompression) {
-        return FileCompressionState::uncompressed;
-    }
+    // WOF-backed LZX files are not guaranteed to advertise FILE_ATTRIBUTE_COMPRESSED
+    // or occupy fewer bytes than their logical size. Always query WOF metadata before
+    // using those hints to classify a file as uncompressed.
     switch (inspectWofBackingState(path)) {
     case WofBackingState::lzx_compressed:
         return FileCompressionState::lzx_compressed;
