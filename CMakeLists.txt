@@ -25,6 +25,7 @@ add_executable(Compresso WIN32
     src/directory_validator.cpp
     src/directory_scanner.cpp
     src/operation_worker.cpp
+    src/game_discovery.cpp
     src/theme_manager.cpp
     src/main_window.cpp
     include/compresso/directory_validator.h
@@ -33,6 +34,7 @@ add_executable(Compresso WIN32
     include/compresso/compression_backend.h
     include/compresso/directory_scanner.h
     include/compresso/operation_worker.h
+    include/compresso/game_discovery.h
     include/compresso/theme_manager.h
     include/compresso/main_window.h
 )
@@ -98,6 +100,7 @@ if(BUILD_TESTING)
         src/directory_validator.cpp
         src/directory_scanner.cpp
         src/operation_worker.cpp
+        src/game_discovery.cpp
         src/theme_manager.cpp
         src/main_window.cpp
         include/compresso/directory_validator.h
@@ -106,6 +109,7 @@ if(BUILD_TESTING)
         include/compresso/compression_backend.h
         include/compresso/directory_scanner.h
         include/compresso/operation_worker.h
+        include/compresso/game_discovery.h
         include/compresso/theme_manager.h
         include/compresso/main_window.h
     )

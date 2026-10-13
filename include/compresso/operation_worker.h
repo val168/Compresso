@@ -2,6 +2,7 @@
 
 #include "compresso/compression_backend.h"
 #include "compresso/directory_scanner.h"
+#include "compresso/game_discovery.h"
 
 #include <QObject>
 #include <stop_token>
@@ -18,7 +19,8 @@ public:
     {
         scan,
         compress,
-        restore
+        restore,
+        discover_steam
     };
 
     OperationWorker(Kind kind, std::filesystem::path directory,
@@ -31,6 +33,7 @@ signals:
     void scanCompleted(compresso::ScanResult result);
     void compressionCompleted(compresso::CompressionReport result);
     void restorationCompleted(compresso::CompressionReport result);
+    void gamesDiscovered(QList<compresso::GameInstallation> games);
     void compressionProgress(compresso::CompressionProgress progress);
     void progressChanged(QString message);
     void errorOccurred(compresso::OperationError error);

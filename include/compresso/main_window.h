@@ -10,6 +10,7 @@
 #include <QString>
 #include <QStringList>
 #include <stop_token>
+#include <vector>
 
 class QLineEdit;
 class QAction;
@@ -25,12 +26,14 @@ class QSortFilterProxyModel;
 class QComboBox;
 class QLineEdit;
 class QLabel;
+class QStackedWidget;
 
 class MainWindow final : public QMainWindow
 {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+    void refreshLibrary();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -52,6 +55,11 @@ private:
                               const QString& directory);
     void displayCompressionProgress(const compresso::CompressionProgress& progress);
     void showDiagnostics();
+    void displayDiscoveredGames(const QList<compresso::GameInstallation>& games);
+    void queueSelectedGame(compresso::OperationWorker::Kind kind);
+    void startQueue();
+    void startNextQueueTask();
+    void updateQueueTask(int index, const QString& progress, const QString& status);
 
     QLineEdit* directoryPath_ = nullptr;
     QLabel* originalSizeLabel_ = nullptr;
@@ -97,4 +105,19 @@ private:
     QLabel* selectedGameName_ = nullptr;
     QLabel* selectedLauncher_ = nullptr;
     QLabel* selectedStatus_ = nullptr;
+    QStackedWidget* centerPages_ = nullptr;
+    QStandardItemModel* queueModel_ = nullptr;
+    QTableView* queueTable_ = nullptr;
+    QPushButton* startQueueButton_ = nullptr;
+    QPushButton* cancelQueueButton_ = nullptr;
+    struct QueueTask
+    {
+        QString name;
+        QString path;
+        compresso::OperationWorker::Kind kind = compresso::OperationWorker::Kind::compress;
+        QString status = QStringLiteral("Queued");
+    };
+    std::vector<QueueTask> queueTasks_;
+    bool queueRunning_ = false;
+    int activeQueueTask_ = -1;
 };

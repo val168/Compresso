@@ -32,13 +32,16 @@ void OperationWorker::run()
                     emit compressionProgress(progress);
                 }, {}, cancellation_);
             emit compressionCompleted(std::move(result));
-        } else {
+        } else if (kind_ == Kind::restore) {
             emit progressChanged(QStringLiteral("Preparing transparent NTFS LZX restoration…"));
             CompressionReport result = CompressionBackend::restoreDirectory(
                 directory_, [this](const CompressionProgress& progress) {
                     emit compressionProgress(progress);
                 }, {}, cancellation_);
             emit restorationCompleted(std::move(result));
+        } else {
+            emit progressChanged(QStringLiteral("Finding Steam libraries…"));
+            emit gamesDiscovered(SteamDiscovery::discover());
         }
     } catch (const std::exception& exception) {
         OperationError error;

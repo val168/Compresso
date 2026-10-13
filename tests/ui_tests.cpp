@@ -2,6 +2,7 @@
 #include "compresso/directory_validator.h"
 #include "compresso/directory_scanner.h"
 #include "compresso/compression_backend.h"
+#include "compresso/game_discovery.h"
 
 #include <QDir>
 #include <QAction>
@@ -165,6 +166,57 @@ private slots:
         QCOMPARE(originalSize->text(), QStringLiteral("—"));
         QCOMPARE(compressedSize->text(), QStringLiteral("—"));
         QCOMPARE(method->text(), QStringLiteral("LZX"));
+    }
+
+    void parsesSteamLibraryManifestsWithoutInventingEntries()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString steamApps = QDir(temporaryDirectory.path()).filePath("steamapps");
+        const QString installedPath = QDir(steamApps).filePath("common/Installed");
+        QVERIFY(QDir().mkpath(installedPath));
+
+        QFile installedManifest(QDir(steamApps).filePath("appmanifest_480.acf"));
+        QVERIFY(installedManifest.open(QIODevice::WriteOnly | QIODevice::Text));
+        installedManifest.write(R"("AppState" { "appid" "480" "name" "Installed Game" "installdir" "Installed" })");
+        installedManifest.close();
+
+        QFile missingManifest(QDir(steamApps).filePath("appmanifest_481.acf"));
+        QVERIFY(missingManifest.open(QIODevice::WriteOnly | QIODevice::Text));
+        missingManifest.write(R"("AppState" { "appid" "481" "name" "Missing Game" "installdir" "Missing" })");
+        missingManifest.close();
+
+        QFile malformedManifest(QDir(steamApps).filePath("appmanifest_482.acf"));
+        QVERIFY(malformedManifest.open(QIODevice::WriteOnly | QIODevice::Text));
+        malformedManifest.write(R"("AppState" { "appid" "482" "name" "No Install Directory" })");
+        malformedManifest.close();
+
+        const auto games = compresso::SteamDiscovery::parseLibrary(temporaryDirectory.path());
+        QCOMPARE(games.size(), 2);
+        QCOMPARE(games[0].id, QStringLiteral("480"));
+        QCOMPARE(games[0].name, QStringLiteral("Installed Game"));
+        QVERIFY(games[0].available);
+        QCOMPARE(games[1].id, QStringLiteral("481"));
+        QVERIFY(!games[1].available);
+    }
+
+    void parsesNewAndLegacySteamLibraryFolders()
+    {
+        const QString newFormat = QStringLiteral(
+            "\"libraryfolders\" { \"0\" { \"path\" \"C:\\\\Steam\" } "
+            "\"1\" { \"path\" \"D:\\\\Games\\\\SteamLibrary\" } }");
+        const QStringList newPaths = compresso::SteamDiscovery::parseLibraryFolders(newFormat);
+        QCOMPARE(newPaths.size(), 2);
+        QVERIFY(newPaths.contains(QStringLiteral("C:/Steam")));
+        QVERIFY(newPaths.contains(QStringLiteral("D:/Games/SteamLibrary")));
+
+        const QString oldFormat = QStringLiteral(
+            "\"LibraryFolders\" { \"0\" \"C:\\\\Steam\" "
+            "\"1\" \"E:\\\\Games\\\\SteamLibrary\" }");
+        const QStringList oldPaths = compresso::SteamDiscovery::parseLibraryFolders(oldFormat);
+        QCOMPARE(oldPaths.size(), 2);
+        QVERIFY(oldPaths.contains(QStringLiteral("C:/Steam")));
+        QVERIFY(oldPaths.contains(QStringLiteral("E:/Games/SteamLibrary")));
     }
 
     void supportsManualLightAndDarkThemes()
