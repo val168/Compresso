@@ -51,7 +51,7 @@ qt_generate_deploy_app_script(
     OUTPUT_SCRIPT COMPRESSO_DEPLOY_SCRIPT
     NO_TRANSLATIONS
     DEPLOY_TOOL_OPTIONS --compiler-runtime --skip-plugin-types
-                         generic,imageformats,networkinformation
+                         generic,networkinformation
 )
 install(SCRIPT "${COMPRESSO_DEPLOY_SCRIPT}")
 
