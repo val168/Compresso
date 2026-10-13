@@ -50,6 +50,7 @@
 #include <QPixmap>
 #include <QStandardPaths>
 #include <QDesktopServices>
+#include <QDebug>
 #include <QUrl>
 #include <QSet>
 #include <QRegularExpression>
@@ -1240,9 +1241,17 @@ void MainWindow::requestArtwork(const QString& appId, int variant)
             reply->deleteLater();
             return;
         }
+        const QString error = reply->errorString();
+        qWarning().noquote() << "Steam artwork request failed:" << reply->url().toString()
+                             << error << "HTTP"
+                             << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         artworkRequests_.remove(appId);
         reply->deleteLater();
-        if (variant + 1 < artworkNames.size()) requestArtwork(appId, variant + 1);
+        if (variant + 1 < artworkNames.size()) {
+            requestArtwork(appId, variant + 1);
+        } else if (selectedArtworkAppId_ == appId) {
+            selectedArtwork_->setToolTip(QStringLiteral("Artwork unavailable: %1").arg(error));
+        }
     });
 }
 
