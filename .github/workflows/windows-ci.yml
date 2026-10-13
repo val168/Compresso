@@ -37,8 +37,8 @@ jobs:
         run: |
           $testTemp = Join-Path $env:LOCALAPPDATA ("Temp\Compresso-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT + "-${{ matrix.preset }}")
           New-Item -ItemType Directory -Path $testTemp -Force | Out-Null
-          "TEMP=$testTemp" >> $env:GITHUB_ENV
-          "TMP=$testTemp" >> $env:GITHUB_ENV
+          "COMPRESSO_TEST_TEMP=$testTemp" >> $env:GITHUB_ENV
+          
       - name: Configure ${{ matrix.preset }}
         shell: msys2 {0}
         run: cmake --preset ${{ matrix.preset }} "-DCMAKE_PREFIX_PATH=$(cygpath -m /ucrt64)"
@@ -50,7 +50,10 @@ jobs:
       - name: Run ${{ matrix.preset }} tests
         shell: msys2 {0}
         run: |
-          if ctest --test-dir out/build/${{ matrix.preset }} --output-on-failure; then
+          test_temp="$(cygpath -u "$COMPRESSO_TEST_TEMP")"
+          mkdir -p "$test_temp"
+          windows_test_temp="$(cygpath -w "$test_temp")"
+          if TEMP="$windows_test_temp" TMP="$windows_test_temp" TMPDIR="$test_temp" ctest --test-dir out/build/${{ matrix.preset }} --output-on-failure; then
             test_status=0
           else
             test_status=$?
