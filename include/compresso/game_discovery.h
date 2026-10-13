@@ -23,6 +23,7 @@ public:
     [[nodiscard]] static QList<GameInstallation> discover();
     [[nodiscard]] static QList<GameInstallation> parseLibrary(const QString& libraryPath);
     [[nodiscard]] static QStringList parseLibraryFolders(const QString& vdfText);
+    [[nodiscard]] static QStringList artworkCacheFiles(const QString& appId);
 };
 
 } // namespace compresso

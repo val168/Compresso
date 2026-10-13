@@ -29,6 +29,7 @@ class QLineEdit;
 class QLabel;
 class QStackedWidget;
 class QNetworkAccessManager;
+class QUrl;
 
 class MainWindow final : public QMainWindow
 {
@@ -63,6 +64,8 @@ private:
     void startNextQueueTask();
     void updateQueueTask(int index, const QString& progress, const QString& status);
     void requestArtwork(const QString& appId, int variant = 0);
+    void downloadArtwork(const QString& appId, const QUrl& url, const QString& cachePath,
+                         int variant);
     void showGameArtwork(const QString& appId);
 
     QLineEdit* directoryPath_ = nullptr;

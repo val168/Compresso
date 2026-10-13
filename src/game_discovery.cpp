@@ -166,3 +166,34 @@ QList<compresso::GameInstallation> compresso::SteamDiscovery::discover()
     });
     return result;
 }
+
+QStringList compresso::SteamDiscovery::artworkCacheFiles(const QString& appId)
+{
+    static const QRegularExpression validAppId(QStringLiteral("^\\d+$"));
+    if (!validAppId.match(appId).hasMatch()) return {};
+
+    QStringList result;
+    for (const QString& root : steamRoots()) {
+        const QString cachePath = QDir(root).filePath(
+            QStringLiteral("appcache/librarycache/%1").arg(appId));
+        const QDir cache(cachePath);
+        if (!cache.exists()) continue;
+        QDirIterator files(cachePath, {QStringLiteral("*.jpg"), QStringLiteral("*.png")},
+                           QDir::Files, QDirIterator::Subdirectories);
+        QStringList candidates;
+        while (files.hasNext()) candidates.push_back(files.next());
+        const auto priority = [](const QString& path) {
+            const QString name = QFileInfo(path).fileName().toCaseFolded();
+            if (name == QStringLiteral("library_header.jpg")) return 0;
+            if (name == QStringLiteral("header.jpg")) return 1;
+            if (name == QStringLiteral("library_capsule.jpg")) return 2;
+            return 3;
+        };
+        std::stable_sort(candidates.begin(), candidates.end(),
+                         [&priority](const QString& left, const QString& right) {
+            return priority(left) < priority(right);
+        });
+        result.append(candidates);
+    }
+    return result;
+}

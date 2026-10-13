@@ -46,6 +46,8 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPainter>
 #include <QPixmap>
 #include <QStandardPaths>
@@ -1194,7 +1196,7 @@ void MainWindow::requestArtwork(const QString& appId, int variant)
     static const QStringList artworkNames{
         QStringLiteral("header.jpg"), QStringLiteral("library_600x900.jpg")};
     static const QRegularExpression validAppId(QStringLiteral("^\\d+$"));
-    if (!validAppId.match(appId).hasMatch() || variant >= artworkNames.size()
+    if (!validAppId.match(appId).hasMatch() || variant > artworkNames.size()
         || artworkRequests_.contains(appId)) return;
 
     const QString cacheDirectory = QDir(
@@ -1208,9 +1210,68 @@ void MainWindow::requestArtwork(const QString& appId, int variant)
         QFile::remove(cachePath);
     }
 
+    for (const QString& steamArtwork : compresso::SteamDiscovery::artworkCacheFiles(appId)) {
+        QImage image;
+        if (!image.load(steamArtwork) || image.width() < 100 || image.height() < 60) continue;
+        QFile::remove(cachePath);
+        if (!QFile::copy(steamArtwork, cachePath)) continue;
+        const QPixmap pixmap = QPixmap::fromImage(image);
+        for (int row = 0; row < gameModel_->rowCount(); ++row) {
+            auto* item = gameModel_->item(row, 0);
+            if (item && item->data(Qt::UserRole + 1).toString() == appId) {
+                item->setIcon(QIcon(pixmap));
+                item->setData(cachePath, Qt::UserRole + 2);
+            }
+        }
+        if (selectedArtworkAppId_ == appId) showGameArtwork(appId);
+        return;
+    }
+
     artworkRequests_.insert(appId);
+    if (variant == artworkNames.size()) {
+        const QUrl metadataUrl(QStringLiteral("https://store.steampowered.com/api/appdetails?appids=%1&filters=basic")
+                                   .arg(appId));
+        QNetworkRequest request(metadataUrl);
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                             QNetworkRequest::NoLessSafeRedirectPolicy);
+        QNetworkReply* reply = artworkNetwork_->get(request);
+        QTimer::singleShot(15000, reply, [reply] {
+            if (reply->isRunning()) reply->abort();
+        });
+        connect(reply, &QNetworkReply::finished, this,
+                [this, reply, appId, cachePath] {
+            const QByteArray data = reply->readAll();
+            QUrl artworkUrl;
+            if (reply->error() == QNetworkReply::NoError) {
+                const QJsonObject app = QJsonDocument::fromJson(data).object()
+                                            .value(appId).toObject();
+                artworkUrl = QUrl(app.value(QStringLiteral("data")).toObject()
+                                      .value(QStringLiteral("header_image")).toString());
+            }
+            if (!artworkUrl.isValid() || artworkUrl.scheme() != QStringLiteral("https")) {
+                qWarning().noquote() << "Steam artwork metadata unavailable for app" << appId
+                                     << reply->errorString();
+                artworkRequests_.remove(appId);
+                if (selectedArtworkAppId_ == appId) {
+                    selectedArtwork_->setToolTip(QStringLiteral("Artwork unavailable"));
+                }
+                reply->deleteLater();
+                return;
+            }
+            reply->deleteLater();
+            downloadArtwork(appId, artworkUrl, cachePath, 2);
+        });
+        return;
+    }
+
     const QUrl url(QStringLiteral("https://cdn.akamai.steamstatic.com/steam/apps/%1/%2")
                        .arg(appId, artworkNames.at(variant)));
+    downloadArtwork(appId, url, cachePath, variant);
+}
+
+void MainWindow::downloadArtwork(const QString& appId, const QUrl& url,
+                                 const QString& cachePath, int variant)
+{
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -1218,7 +1279,8 @@ void MainWindow::requestArtwork(const QString& appId, int variant)
     QTimer::singleShot(15000, reply, [reply] {
         if (reply->isRunning()) reply->abort();
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, appId, variant, cachePath] {
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, appId, cachePath, variant] {
         const QByteArray data = reply->readAll();
         QImage image;
         if (reply->error() == QNetworkReply::NoError && image.loadFromData(data)
@@ -1247,7 +1309,7 @@ void MainWindow::requestArtwork(const QString& appId, int variant)
                              << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         artworkRequests_.remove(appId);
         reply->deleteLater();
-        if (variant + 1 < artworkNames.size()) {
+        if (variant < 2) {
             requestArtwork(appId, variant + 1);
         } else if (selectedArtworkAppId_ == appId) {
             selectedArtwork_->setToolTip(QStringLiteral("Artwork unavailable: %1").arg(error));
