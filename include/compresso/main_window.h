@@ -7,6 +7,7 @@
 
 #include <QMainWindow>
 #include <QElapsedTimer>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <stop_token>
@@ -27,6 +28,7 @@ class QComboBox;
 class QLineEdit;
 class QLabel;
 class QStackedWidget;
+class QNetworkAccessManager;
 
 class MainWindow final : public QMainWindow
 {
@@ -60,6 +62,8 @@ private:
     void startQueue();
     void startNextQueueTask();
     void updateQueueTask(int index, const QString& progress, const QString& status);
+    void requestArtwork(const QString& appId, int variant = 0);
+    void showGameArtwork(const QString& appId);
 
     QLineEdit* directoryPath_ = nullptr;
     QLabel* originalSizeLabel_ = nullptr;
@@ -105,6 +109,10 @@ private:
     QLabel* selectedGameName_ = nullptr;
     QLabel* selectedLauncher_ = nullptr;
     QLabel* selectedStatus_ = nullptr;
+    QLabel* selectedArtwork_ = nullptr;
+    QNetworkAccessManager* artworkNetwork_ = nullptr;
+    QSet<QString> artworkRequests_;
+    QString selectedArtworkAppId_;
     QStackedWidget* centerPages_ = nullptr;
     QStandardItemModel* queueModel_ = nullptr;
     QTableView* queueTable_ = nullptr;

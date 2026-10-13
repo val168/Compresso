@@ -250,6 +250,14 @@ private slots:
         QVERIFY(system->isChecked());
     }
 
+    void selectedGameArtworkHasFallbackWhenNoGameIsSelected()
+    {
+        MainWindow window;
+        const auto* artwork = window.findChild<QLabel*>("selectedGameArtwork");
+        QVERIFY(artwork);
+        QVERIFY(!artwork->pixmap().isNull());
+    }
+
     void widgetsRespectHighDpiScale()
     {
         MainWindow window;

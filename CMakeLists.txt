@@ -15,7 +15,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Network Widgets)
 
 add_executable(Compresso WIN32
     src/main.cpp
@@ -40,7 +40,7 @@ add_executable(Compresso WIN32
 )
 
 target_include_directories(Compresso PRIVATE include)
-target_link_libraries(Compresso PRIVATE Qt6::Widgets)
+target_link_libraries(Compresso PRIVATE Qt6::Network Qt6::Widgets)
 target_compile_features(Compresso PRIVATE cxx_std_23)
 
 install(TARGETS Compresso RUNTIME DESTINATION bin)
@@ -51,7 +51,7 @@ qt_generate_deploy_app_script(
     OUTPUT_SCRIPT COMPRESSO_DEPLOY_SCRIPT
     NO_TRANSLATIONS
     DEPLOY_TOOL_OPTIONS --compiler-runtime --skip-plugin-types
-                         generic,imageformats,networkinformation,tls
+                         generic,imageformats,networkinformation
 )
 install(SCRIPT "${COMPRESSO_DEPLOY_SCRIPT}")
 
@@ -114,7 +114,7 @@ if(BUILD_TESTING)
         include/compresso/main_window.h
     )
     target_include_directories(CompressoUiTests PRIVATE include)
-    target_link_libraries(CompressoUiTests PRIVATE Qt6::Widgets Qt6::Test)
+    target_link_libraries(CompressoUiTests PRIVATE Qt6::Network Qt6::Widgets Qt6::Test)
     target_compile_features(CompressoUiTests PRIVATE cxx_std_23)
 
     add_test(NAME CompressoUiTests

@@ -7,6 +7,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QColor>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -14,6 +15,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QIcon>
 #include <QLocale>
 #include <QLineEdit>
 #include <QPushButton>
@@ -39,6 +41,14 @@
 #include <QAction>
 #include <QToolButton>
 #include <QFileInfo>
+#include <QFile>
+#include <QImage>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPainter>
+#include <QPixmap>
+#include <QStandardPaths>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QSet>
@@ -452,6 +462,8 @@ MainWindow::MainWindow(QWidget* parent)
     gameTable_->setAlternatingRowColors(true);
     gameTable_->setShowGrid(false);
     gameTable_->verticalHeader()->hide();
+    gameTable_->setIconSize(QSize(44, 44));
+    gameTable_->verticalHeader()->setDefaultSectionSize(48);
     gameTable_->horizontalHeader()->setStretchLastSection(false);
     gameTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     for (int column = 1; column < 9; ++column)
@@ -520,6 +532,7 @@ MainWindow::MainWindow(QWidget* parent)
         selectedGameName_->setText(nameItem->text());
         selectedLauncher_->setText(gameModel_->item(sourceRow, 1)->text());
         selectedStatus_->setText(gameModel_->item(sourceRow, 6)->text());
+        showGameArtwork(nameItem->data(Qt::UserRole + 1).toString());
         const QString path = nameItem->data(Qt::UserRole).toString();
         if (!path.isEmpty() && path != directoryPath_->text()) {
             directoryPath_->setText(path);
@@ -582,6 +595,14 @@ MainWindow::MainWindow(QWidget* parent)
     selectedGameName_ = new QLabel(QStringLiteral("No game selected"), previousContent);
     selectedGameName_->setObjectName(QStringLiteral("selectedGameName"));
     selectedGameName_->setStyleSheet(QStringLiteral("font-size:20px;font-weight:650;"));
+    selectedArtwork_ = new QLabel(previousContent);
+    selectedArtwork_->setObjectName(QStringLiteral("selectedGameArtwork"));
+    selectedArtwork_->setAlignment(Qt::AlignCenter);
+    selectedArtwork_->setMinimumHeight(128);
+    selectedArtwork_->setMaximumHeight(180);
+    selectedArtwork_->setScaledContents(true);
+    artworkNetwork_ = new QNetworkAccessManager(this);
+    showGameArtwork({});
     selectedLauncher_ = new QLabel(QStringLiteral("Manual folder"), previousContent);
     selectedLauncher_->setObjectName(QStringLiteral("selectedLauncher"));
     selectedStatus_ = new QLabel(QStringLiteral("Unknown"), previousContent);
@@ -594,6 +615,7 @@ MainWindow::MainWindow(QWidget* parent)
         oldLayout->insertWidget(0, selectedGameName_);
         oldLayout->insertWidget(1, selectedLauncher_);
         oldLayout->insertWidget(2, selectedStatus_);
+        oldLayout->insertWidget(0, selectedArtwork_);
     }
     shellLayout->addWidget(sidebar);
     shellLayout->addWidget(center, 1);
@@ -1015,6 +1037,8 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
         gameModel_->item(modelRow, column)->setText(values[column]);
     auto* gameItem = gameModel_->item(modelRow, 0);
     gameItem->setData(directory, Qt::UserRole);
+    if (gameItem->icon().isNull())
+        gameItem->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
     gameItem->setToolTip(directory);
     gameModel_->item(modelRow, 6)->setToolTip(compressedFiles > 0
         ? QStringLiteral("Windows reports compressed files, but the algorithm is not verified.")
@@ -1093,10 +1117,18 @@ void MainWindow::displayDiscoveredGames(const QList<compresso::GameInstallation>
         row[0]->setData(game.install_path, Qt::UserRole);
         row[0]->setData(game.id, Qt::UserRole + 1);
         row[0]->setToolTip(game.install_path);
+        const QString cachePath = QDir(
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+                                      .filePath(QStringLiteral("artwork/%1.jpg").arg(game.id));
+        const QPixmap cachedArtwork(cachePath);
+        row[0]->setData(cachePath, Qt::UserRole + 2);
+        row[0]->setIcon(cachedArtwork.isNull()
+            ? style()->standardIcon(QStyle::SP_MediaPlay) : QIcon(cachedArtwork));
         row[6]->setToolTip(game.available
             ? QStringLiteral("Analyze this installation to measure its current state.")
             : QStringLiteral("The manifest exists, but the installation directory is missing."));
         gameModel_->appendRow(row);
+        if (cachedArtwork.isNull()) requestArtwork(game.id);
         launchers.insert(game.launcher);
         drives.insert(drive);
     }
@@ -1117,12 +1149,101 @@ void MainWindow::displayDiscoveredGames(const QList<compresso::GameInstallation>
     selectedLauncher_->setText(games.isEmpty()
         ? QStringLiteral("Add a folder manually") : QStringLiteral("Steam library"));
     selectedStatus_->setText(QStringLiteral("—"));
+    showGameArtwork({});
     analyzedDirectoryIsEligible_ = false;
     compressButton_->setEnabled(false);
     restoreButton_->setEnabled(false);
     statusBar()->showMessage(games.isEmpty()
         ? QStringLiteral("No Steam installations found. You can add a folder manually.")
         : QStringLiteral("Found %1 Steam games across available libraries.").arg(games.size()));
+}
+
+void MainWindow::showGameArtwork(const QString& appId)
+{
+    selectedArtworkAppId_ = appId;
+    QPixmap artwork;
+    if (!appId.isEmpty()) {
+        const QString path = QDir(
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+                                 .filePath(QStringLiteral("artwork/%1.jpg").arg(appId));
+        artwork.load(path);
+    }
+    if (artwork.isNull()) {
+        QPixmap placeholder(320, 150);
+        placeholder.fill(QColor(QStringLiteral("#192126")));
+        QPainter painter(&placeholder);
+        const QPixmap icon = style()->standardIcon(QStyle::SP_MediaPlay)
+                                 .pixmap(QSize(52, 52));
+        painter.drawPixmap((placeholder.width() - icon.width()) / 2,
+                           (placeholder.height() - icon.height()) / 2, icon);
+        selectedArtwork_->setPixmap(placeholder);
+        selectedArtwork_->setToolTip(appId.isEmpty()
+            ? QStringLiteral("Artwork unavailable")
+            : QStringLiteral("Loading game artwork…"));
+        if (!appId.isEmpty()) requestArtwork(appId);
+        return;
+    }
+    selectedArtwork_->setPixmap(artwork.scaled(selectedArtwork_->size(), Qt::KeepAspectRatio,
+                                                Qt::SmoothTransformation));
+    selectedArtwork_->setToolTip(QStringLiteral("Steam game artwork"));
+}
+
+void MainWindow::requestArtwork(const QString& appId, int variant)
+{
+    static const QStringList artworkNames{
+        QStringLiteral("header.jpg"), QStringLiteral("library_600x900.jpg")};
+    static const QRegularExpression validAppId(QStringLiteral("^\\d+$"));
+    if (!validAppId.match(appId).hasMatch() || variant >= artworkNames.size()
+        || artworkRequests_.contains(appId)) return;
+
+    const QString cacheDirectory = QDir(
+        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+                                      .filePath(QStringLiteral("artwork"));
+    if (!QDir().mkpath(cacheDirectory)) return;
+    const QString cachePath = QDir(cacheDirectory).filePath(appId + QStringLiteral(".jpg"));
+    if (QFileInfo::exists(cachePath)) {
+        QPixmap cached(cachePath);
+        if (!cached.isNull()) return;
+        QFile::remove(cachePath);
+    }
+
+    artworkRequests_.insert(appId);
+    const QUrl url(QStringLiteral("https://cdn.akamai.steamstatic.com/steam/apps/%1/%2")
+                       .arg(appId, artworkNames.at(variant)));
+    QNetworkRequest request(url);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply* reply = artworkNetwork_->get(request);
+    QTimer::singleShot(15000, reply, [reply] {
+        if (reply->isRunning()) reply->abort();
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, appId, variant, cachePath] {
+        const QByteArray data = reply->readAll();
+        QImage image;
+        if (reply->error() == QNetworkReply::NoError && image.loadFromData(data)
+            && image.width() >= 100 && image.height() >= 60) {
+            QFile file(cachePath);
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write(data);
+                file.close();
+            }
+            const QPixmap pixmap = QPixmap::fromImage(image);
+            for (int row = 0; row < gameModel_->rowCount(); ++row) {
+                auto* item = gameModel_->item(row, 0);
+                if (item && item->data(Qt::UserRole + 1).toString() == appId) {
+                    item->setIcon(QIcon(pixmap));
+                    item->setData(cachePath, Qt::UserRole + 2);
+                }
+            }
+            if (selectedArtworkAppId_ == appId) showGameArtwork(appId);
+            artworkRequests_.remove(appId);
+            reply->deleteLater();
+            return;
+        }
+        artworkRequests_.remove(appId);
+        reply->deleteLater();
+        if (variant + 1 < artworkNames.size()) requestArtwork(appId, variant + 1);
+    });
 }
 
 void MainWindow::queueSelectedGame(compresso::OperationWorker::Kind kind)
