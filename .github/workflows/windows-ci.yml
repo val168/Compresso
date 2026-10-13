@@ -65,8 +65,27 @@ jobs:
             if (-not $process.WaitForInputIdle(15000) -or $process.HasExited) {
               throw 'Packaged Compresso did not reach its GUI message loop.'
             }
+            $windowReady = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              $process.Refresh()
+              if ($process.HasExited) {
+                throw "Packaged Compresso exited during startup with code $($process.ExitCode)."
+              }
+              if ($process.MainWindowHandle -ne 0) {
+                $windowReady = $true
+                break
+              }
+              Start-Sleep -Milliseconds 100
+            }
+            if (-not $windowReady) {
+              throw 'Packaged Compresso did not create its main window.'
+            }
+            Start-Sleep -Seconds 1
             if (-not $process.CloseMainWindow() -or -not $process.WaitForExit(5000)) {
               throw 'Packaged Compresso did not close cleanly after the smoke test.'
+            }
+            if ($process.ExitCode -ne 0) {
+              throw "Packaged Compresso exited with code $($process.ExitCode)."
             }
           }
           finally {

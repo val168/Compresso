@@ -808,8 +808,6 @@ void MainWindow::displayRestoreResult(const compresso::CompressionReport& result
         + locale.toString(static_cast<qulonglong>(result.skippedCount())) + " skipped, "
         + locale.toString(static_cast<qulonglong>(result.failedCount())) + " failed";
     if (result.skippedCount() > 0) {
-        message += ", " + locale.toString(static_cast<qulonglong>(result.skippedCount()))
-                   + " skipped";
         if (result.failedCount() == 0) {
             const auto skippedIssue = std::find_if(result.files.begin(), result.files.end(),
                 [](const auto& file) {
@@ -822,8 +820,6 @@ void MainWindow::displayRestoreResult(const compresso::CompressionReport& result
         }
     }
     if (result.failedCount() > 0) {
-        message += ", " + locale.toString(static_cast<qulonglong>(result.failedCount()))
-                   + " failed";
         const auto firstFailure = std::find_if(result.files.begin(), result.files.end(),
             [](const auto& file) { return file.state == compresso::CompressionFileState::failed; });
         if (firstFailure != result.files.end() && firstFailure->error) {

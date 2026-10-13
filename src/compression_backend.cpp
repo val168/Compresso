@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <string>
 #include <system_error>
@@ -140,18 +141,6 @@ bool readFileStamp(const std::filesystem::path& path, FileStamp& stamp,
     return okay;
 }
 
-bool getAllocatedSize(const std::filesystem::path& path, std::uintmax_t& size)
-{
-    DWORD high = 0;
-    SetLastError(ERROR_SUCCESS);
-    const DWORD low = GetCompressedFileSizeW(path.c_str(), &high);
-    if (low == INVALID_FILE_SIZE && GetLastError() != NO_ERROR) {
-        return false;
-    }
-    size = (static_cast<std::uintmax_t>(high) << 32) | low;
-    return true;
-}
-
 bool sameFileStamp(const FileStamp& left, const FileStamp& right)
 {
     const auto& a = left.information;
@@ -172,13 +161,15 @@ bool sameFileIdentityAndSize(const FileStamp& left, const FileStamp& right)
            && a.nFileSizeHigh == b.nFileSizeHigh && a.nFileSizeLow == b.nFileSizeLow;
 }
 
-enum class LzxBackingState
+enum class WofBackingState
 {
     lzx_compressed,
-    other_or_uncompressed,
+    other_external_provider,
+    physical_file,
     unavailable
 };
 
+constexpr ULONG wofProviderWim = 1;
 constexpr ULONG wofProviderFile = 2;
 constexpr ULONG fileProviderCompressionLzx = 1;
 
@@ -190,16 +181,18 @@ struct WofCompressionInfo
 
 using WofIsExternalFileFunction = HRESULT(WINAPI*)(LPCWSTR, PBOOL, PULONG, PVOID, PULONG);
 
-LzxBackingState lzxBackingState(const std::filesystem::path& path)
+WofBackingState wofBackingState(const std::filesystem::path& path)
 {
-    static const HMODULE wofModule = LoadLibraryW(L"wofutil.dll");
+    static const HMODULE wofModule = LoadLibraryExW(
+        L"wofutil.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (wofModule == nullptr) {
-        return LzxBackingState::unavailable;
+        return WofBackingState::unavailable;
     }
-    const auto inspect = reinterpret_cast<WofIsExternalFileFunction>(
-        GetProcAddress(wofModule, "WofIsExternalFile"));
+    const FARPROC functionAddress = GetProcAddress(wofModule, "WofIsExternalFile");
+    static_assert(sizeof(functionAddress) == sizeof(WofIsExternalFileFunction));
+    const auto inspect = std::bit_cast<WofIsExternalFileFunction>(functionAddress);
     if (inspect == nullptr) {
-        return LzxBackingState::unavailable;
+        return WofBackingState::unavailable;
     }
 
     BOOL external = FALSE;
@@ -208,20 +201,25 @@ LzxBackingState lzxBackingState(const std::filesystem::path& path)
     ULONG infoLength = sizeof(info);
     const HRESULT result = inspect(path.c_str(), &external, &provider, &info, &infoLength);
     if (FAILED(result)) {
-        return LzxBackingState::unavailable;
+        return WofBackingState::unavailable;
     }
-    if (external == FALSE || provider != wofProviderFile) {
-        return LzxBackingState::other_or_uncompressed;
+    if (external == FALSE) {
+        return WofBackingState::physical_file;
+    }
+    if (provider != wofProviderFile && provider != wofProviderWim) {
+        return WofBackingState::other_external_provider;
+    }
+    if (provider == wofProviderWim) {
+        return WofBackingState::other_external_provider;
     }
     if (infoLength < sizeof(info)) {
-        return LzxBackingState::unavailable;
+        return WofBackingState::unavailable;
     }
 
-    // WIM-backed files and other WOF algorithms are deliberately left untouched.
     if (info.algorithm == fileProviderCompressionLzx) {
-        return LzxBackingState::lzx_compressed;
+        return WofBackingState::lzx_compressed;
     }
-    return LzxBackingState::other_or_uncompressed;
+    return WofBackingState::other_external_provider;
 }
 
 QByteArray fileDigest(const std::filesystem::path& path)
@@ -674,16 +672,36 @@ compresso::CompressionReport runDirectoryOperation(
         }
 
         if (restoring) {
-            const LzxBackingState backingState = lzxBackingState(filePath);
-            if (backingState == LzxBackingState::unavailable) {
+            const WofBackingState backingState = wofBackingState(filePath);
+            if (backingState == WofBackingState::unavailable) {
                 appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
                                      "Windows could not verify the file's LZX algorithm."),
                              scannedFile.logical_size_bytes);
                 continue;
             }
-            if (backingState != LzxBackingState::lzx_compressed) {
+            if (backingState != WofBackingState::lzx_compressed) {
                 appendResult(skipped(filePath, CompressionSkipReason::not_lzx_compressed,
                                      "The file is not WOF LZX-compressed."),
+                             scannedFile.logical_size_bytes);
+                continue;
+            }
+        } else {
+            const WofBackingState backingState = wofBackingState(filePath);
+            if (backingState == WofBackingState::unavailable) {
+                appendResult(skipped(filePath, CompressionSkipReason::inaccessible,
+                                     "Windows could not verify the file's compression provider."),
+                             scannedFile.logical_size_bytes);
+                continue;
+            }
+            if (backingState == WofBackingState::lzx_compressed) {
+                appendResult(skipped(filePath, CompressionSkipReason::already_compressed,
+                                     "The file is already WOF LZX-compressed."),
+                             scannedFile.logical_size_bytes);
+                continue;
+            }
+            if (backingState == WofBackingState::other_external_provider) {
+                appendResult(skipped(filePath, CompressionSkipReason::unsupported_entry,
+                                     "Files backed by other Windows providers are not changed."),
                              scannedFile.logical_size_bytes);
                 continue;
             }
@@ -817,15 +835,17 @@ compresso::CompressionReport runDirectoryOperation(
         }
 
         if (restoring) {
-            const LzxBackingState finalBackingState = lzxBackingState(filePath);
-            if (finalBackingState == LzxBackingState::unavailable) {
+            const WofBackingState finalBackingState = wofBackingState(filePath);
+            if (finalBackingState == WofBackingState::unavailable) {
                 fileResult.state = CompressionFileState::failed;
                 setFileError(fileResult, OperationErrorCode::verification_failed,
                              "WOF compression metadata is unavailable after compact.exe.");
-            } else if (finalBackingState == LzxBackingState::lzx_compressed) {
+            } else if (finalBackingState != WofBackingState::physical_file) {
                 fileResult.state = CompressionFileState::failed;
                 setFileError(fileResult, OperationErrorCode::verification_failed,
-                             "WOF still reports the LZX file provider after restoration.");
+                             finalBackingState == WofBackingState::lzx_compressed
+                                 ? "WOF still reports the LZX file provider after restoration."
+                                 : "A Windows external file provider remains after restoration.");
             } else if (fileDigest(filePath) != originalDigest) {
                 fileResult.state = CompressionFileState::failed;
                 setFileError(fileResult, OperationErrorCode::file_changed,
@@ -837,27 +857,20 @@ compresso::CompressionReport runDirectoryOperation(
             continue;
         }
 
-        const DWORD finalAttributes = GetFileAttributesW(filePath.c_str());
-        std::uintmax_t finalAllocatedSize = 0;
-        const bool finalAllocationAvailable = getAllocatedSize(filePath, finalAllocatedSize);
-        const bool allocationReduced = finalAllocationAvailable
-                                       && finalAllocatedSize < scannedFile.allocated_size_bytes;
-        if (finalAttributes == INVALID_FILE_ATTRIBUTES) {
+        const WofBackingState finalBackingState = wofBackingState(filePath);
+        if (finalBackingState == WofBackingState::unavailable) {
             fileResult.state = CompressionFileState::failed;
-            const DWORD error = GetLastError();
-            setFileError(fileResult, classifyWindowsError(error),
-                         std::system_category().message(static_cast<int>(error)),
-                         static_cast<int>(error));
-        } else if ((finalAttributes & FILE_ATTRIBUTE_COMPRESSED) != 0 || allocationReduced) {
+            setFileError(fileResult, OperationErrorCode::verification_failed,
+                         "Windows could not verify LZX compression after compact.exe.");
+        } else if (finalBackingState == WofBackingState::lzx_compressed) {
             fileResult.state = CompressionFileState::compressed;
-        } else if (finalAllocationAvailable) {
+        } else if (finalBackingState == WofBackingState::physical_file) {
             fileResult.state = CompressionFileState::skipped;
             fileResult.skip_reason = CompressionSkipReason::unsupported_entry;
-            fileResult.error_message = "The filesystem did not retain LZX compression for this file.";
         } else {
             fileResult.state = CompressionFileState::failed;
             setFileError(fileResult, OperationErrorCode::verification_failed,
-                         "GetCompressedFileSizeW did not return a final allocated size.");
+                         "The file was not stored with the requested WOF LZX provider.");
         }
         appendResult(std::move(fileResult), scannedFile.logical_size_bytes);
     }

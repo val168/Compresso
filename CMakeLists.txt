@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(Compresso VERSION 0.1.0 LANGUAGES CXX)
+project(Compresso VERSION 1.0.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "Compresso is a Windows-only application.")
@@ -14,8 +14,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTOUIC ON)
-set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets)
 
@@ -50,7 +48,8 @@ qt_generate_deploy_app_script(
     TARGET Compresso
     OUTPUT_SCRIPT COMPRESSO_DEPLOY_SCRIPT
     NO_TRANSLATIONS
-    DEPLOY_TOOL_OPTIONS --compiler-runtime
+    DEPLOY_TOOL_OPTIONS --compiler-runtime --skip-plugin-types
+                         generic,imageformats,networkinformation,tls
 )
 install(SCRIPT "${COMPRESSO_DEPLOY_SCRIPT}")
 
