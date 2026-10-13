@@ -44,8 +44,19 @@ add_executable(Compresso WIN32
 target_include_directories(Compresso PRIVATE include)
 target_link_libraries(Compresso PRIVATE Qt6::Network Qt6::Widgets)
 target_compile_features(Compresso PRIVATE cxx_std_23)
+set_target_properties(Compresso PROPERTIES OUTPUT_NAME CompressoApp)
+set(QT_DEPLOY_BIN_DIR "dependencies")
 
-install(TARGETS Compresso RUNTIME DESTINATION bin)
+# Keep the user-facing executable free of Qt imports. Windows resolves an
+# executable's imported DLLs before its entry point, so a small launcher starts
+# the Qt application from the adjacent dependencies directory.
+add_executable(CompressoLauncher WIN32 src/launcher.cpp)
+target_compile_features(CompressoLauncher PRIVATE cxx_std_23)
+target_link_options(CompressoLauncher PRIVATE -municode -static -static-libgcc -static-libstdc++)
+set_target_properties(CompressoLauncher PROPERTIES OUTPUT_NAME Compresso)
+
+install(TARGETS CompressoLauncher RUNTIME DESTINATION bin)
+install(TARGETS Compresso RUNTIME DESTINATION dependencies)
 install(FILES LICENSE resources/PORTABLE-README.txt DESTINATION .)
 
 qt_generate_deploy_app_script(
@@ -55,6 +66,7 @@ qt_generate_deploy_app_script(
     DEPLOY_TOOL_OPTIONS --compiler-runtime --skip-plugin-types
                          generic,networkinformation
 )
+install(CODE "set(QT_DEPLOY_BIN_DIR \"dependencies\")")
 install(SCRIPT "${COMPRESSO_DEPLOY_SCRIPT}")
 
 # windeployqt deploys Qt libraries and plugins. Resolve their non-system DLL
@@ -84,7 +96,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
         COMMAND "${CMAKE_COMMAND}" -E chdir "${COMPRESSO_PORTABLE_ROOT}"
                 "${CMAKE_COMMAND}" -E tar cf "${COMPRESSO_PORTABLE_ARCHIVE}"
                 --format=zip Compresso
-        DEPENDS Compresso
+        DEPENDS Compresso CompressoLauncher
         COMMENT "Deploying Qt runtime and creating the portable Compresso ZIP"
         VERBATIM
     )
