@@ -100,3 +100,67 @@ jobs:
           path: out/build/release/portable/*.zip
           if-no-files-found: error
           retention-days: 30
+
+  publish-release:
+    name: Publish verified versioned Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-test
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the tested portable ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: Compresso-portable-windows-x64
+          path: release-asset
+
+      - name: Publish GitHub Release and attach portable ZIP
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { owner, repo } = context.repo;
+            const tag = context.ref.replace('refs/tags/', '');
+            const version = tag.replace(/^v/, '');
+            const assetPath = path.join('release-asset', `Compresso-${version}-windows-x64.zip`);
+            const notes = [
+              `Compresso ${version} is a Windows utility for analyzing game folders and applying transparent NTFS LZX compression in place.`,
+              '',
+              '- Analyze logical and allocated sizes, file counts, filesystem type, and LZX eligibility.',
+              '- Compress and restore files through Windows `compact.exe /C /EXE:LZX` and `/U /EXE:LZX`; file paths and direct game access are preserved.',
+              '- Run scans and file operations asynchronously with progress, cancellation, per-file results, and diagnostic details.',
+              '- Includes system, light, and dark themes and a portable Windows distribution.',
+              '',
+              'Requires 64-bit Windows 10 or later. Compression requires a local fixed NTFS volume that supports file compression. File compatibility and space savings vary; review skipped and failed files and test the game after compression.'
+            ].join('\n');
+
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              release = (await github.rest.repos.createRelease({
+                owner, repo, tag_name: tag, target_commitish: context.sha,
+                name: `Compresso ${version}`, body: notes, draft: true,
+                prerelease: false
+              })).data;
+            }
+
+            const existingAsset = release.assets.find(asset => asset.name === path.basename(assetPath));
+            if (existingAsset && release.draft) {
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: existingAsset.id });
+            }
+            if (!existingAsset || release.draft) {
+              const stats = fs.statSync(assetPath);
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name: path.basename(assetPath),
+                data: fs.readFileSync(assetPath),
+                headers: { 'content-type': 'application/zip', 'content-length': stats.size }
+              });
+            }
+            if (release.draft) {
+              await github.rest.repos.updateRelease({ owner, repo, release_id: release.id, draft: false });
+            }
