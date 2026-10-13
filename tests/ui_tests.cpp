@@ -21,6 +21,7 @@
 #include <QScreen>
 #include <QSettings>
 #include <QSize>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QtTest>
@@ -85,6 +86,37 @@ bool createDirectoryJunction(const std::filesystem::path& junction,
         return false;
     }
     return true;
+}
+
+QString compressionReportDetails(const compresso::CompressionReport& report)
+{
+    QStringList details;
+    if (!report.rejection_reason.isEmpty()) {
+        details.push_back(report.rejection_reason);
+    }
+    for (const auto& file : report.files) {
+        QString entry = QString::fromStdWString(file.path.native())
+                        + QStringLiteral(" [state %1, exit %2]")
+                              .arg(static_cast<int>(file.state))
+                              .arg(file.exit_code);
+        if (!file.error_message.isEmpty()) {
+            entry += QStringLiteral("\n") + file.error_message;
+        }
+        if (file.error && !file.error->technical_details.empty()) {
+            entry += QStringLiteral("\n")
+                     + QString::fromUtf8(file.error->technical_details.c_str());
+        }
+        if (!file.standard_output.isEmpty()) {
+            entry += QStringLiteral("\nstdout: ")
+                     + QString::fromLocal8Bit(file.standard_output);
+        }
+        if (!file.standard_error.isEmpty()) {
+            entry += QStringLiteral("\nstderr: ")
+                     + QString::fromLocal8Bit(file.standard_error);
+        }
+        details.push_back(std::move(entry));
+    }
+    return details.join(QLatin1Char('\n'));
 }
 
 } // namespace
@@ -869,7 +901,8 @@ private slots:
         }
 
         QCOMPARE(report.files.size(), std::size_t{1});
-        QCOMPARE(report.compressedCount(), std::size_t{1});
+        QVERIFY2(report.compressedCount() == 1,
+                 qPrintable(compressionReportDetails(report)));
         QCOMPARE(report.failedCount(), std::size_t{0});
         QCOMPARE(report.skippedCount(), std::size_t{0});
         QVERIFY(report.size_summary.has_value());
@@ -1007,10 +1040,11 @@ private slots:
         QVERIFY(beforeScan.traversal_complete);
         QVERIFY(beforeScan.allocation_measurements_complete);
         QTest::mouseClick(compress, Qt::LeftButton);
-        QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().contains("compressed, 0 skipped, 0 failed")
-                                     && (status->currentMessage().contains("Saved")
-                                         || status->currentMessage().contains("increased by")),
-                                 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(status->currentMessage().startsWith("LZX:"), 20000);
+        QVERIFY2(status->currentMessage().contains("compressed, 0 skipped, 0 failed")
+                     && (status->currentMessage().contains("Saved")
+                         || status->currentMessage().contains("increased by")),
+                 qPrintable(status->currentMessage()));
 
         const auto afterScan = compresso::DirectoryScanner::scan(
             std::filesystem::path(gameDirectory.toStdWString()));
@@ -1400,7 +1434,8 @@ private slots:
                 }
             }, {}, cancellation.get_token());
         QVERIFY(report.cancelled);
-        QCOMPARE(report.compressedCount(), std::size_t{1});
+        QVERIFY2(report.compressedCount() == 1,
+                 qPrintable(compressionReportDetails(report)));
         QCOMPARE(report.skippedCount(), std::size_t{1});
         QCOMPARE(report.failedCount(), std::size_t{0});
         QVERIFY(!report.size_summary);
@@ -1434,7 +1469,8 @@ private slots:
 
         const auto compression = compresso::CompressionBackend::compressDirectory(root);
         QVERIFY(compression.target_eligible);
-        QCOMPARE(compression.compressedCount(), std::size_t{1});
+        QVERIFY2(compression.compressedCount() == 1,
+                 qPrintable(compressionReportDetails(compression)));
 
         std::stop_source cancellation;
         const auto restoration = compresso::CompressionBackend::restoreDirectory(
