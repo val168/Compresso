@@ -1,6 +1,6 @@
 # Compression direction
 
-Compresso uses Windows `compact.exe` with `/C` and `/EXE:LZX` to apply transparent NTFS compression to individual files in place. Files remain at their original paths and are directly accessible; the application does not create archives or extraction workflows.
+Compresso uses Windows `compact.exe` with `/C`, `/EXE:LZX`, and `/Q` to apply transparent NTFS compression to individual files in place. Files remain at their original paths and are directly accessible; the application does not create archives or extraction workflows.
 
 The backend requires a local fixed NTFS volume that reports file-compression support. It rejects volume roots, Windows and protected system locations, and Compresso's own installation directory. It also skips reparse points, encrypted or sparse files, files already marked compressed, and files that cannot be safely opened for preflight. Results retain each process exit code, stdout, stderr, and per-file outcome.
 

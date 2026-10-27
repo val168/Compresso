@@ -12,10 +12,12 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_CXX_COMPILER": "g++"
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_PREFIX_PATH": "C:/msys64/ucrt64",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       },
       "environment": {
-        "PATH": "$penv{PATH}"
+        "PATH": "C:/msys64/ucrt64/bin;$penv{PATH}"
       }
     },
     {

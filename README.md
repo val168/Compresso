@@ -14,8 +14,8 @@ These screenshots show the real Compresso main window in its light and dark them
 
 - Select an existing game directory with the Windows folder picker or enter its path.
 - Analyze file count, total logical size, current allocated disk size, filesystem type, and LZX eligibility.
-- Compress eligible files one at a time with Windows `compact.exe /C /EXE:LZX`.
-- Restore supported LZX-compressed files with Windows `compact.exe /U /EXE:LZX`, after confirmation.
+- Compress eligible files one at a time with Windows `compact.exe /C /EXE:LZX /Q`.
+- Restore supported LZX-compressed files with Windows `compact.exe /U /EXE:LZX /Q`, after confirmation.
 - Run scans and file operations in a background worker. See completed-file progress, current filename when available, elapsed time, and status. Cancel stops new files from being scheduled; completed changes remain in place.
 - Compare measured allocated usage before and after compression. The result can show no savings or increased allocation; it is not an estimate based on file types.
 - Choose System, Light, or Dark appearance. Compresso remembers the theme, last validated directory, and window geometry. It never resumes a compression or restore operation on launch.

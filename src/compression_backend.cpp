@@ -295,7 +295,7 @@ compresso::CompactProcessResult runCompact(const std::filesystem::path& executab
     QProcess process;
     process.setProgram(QString::fromStdWString(executable.native()));
     process.setArguments({restoring ? QStringLiteral("/U") : QStringLiteral("/C"),
-                          QStringLiteral("/EXE:LZX"), 
+                          QStringLiteral("/EXE:LZX"), QStringLiteral("/Q"),
                           QString::fromStdWString(file.native())});
     process.start();
 

@@ -139,6 +139,7 @@ if(BUILD_TESTING)
                 -v1
     )
     set_tests_properties(CompressoUiTests PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${CMAKE_PREFIX_PATH}/share/qt6/plugins"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_PREFIX_PATH}/bin"
     )
 endif()

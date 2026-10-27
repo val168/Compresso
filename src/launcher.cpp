@@ -97,9 +97,19 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
 
     CloseHandle(process.hThread);
-    WaitForSingleObject(process.hProcess, INFINITE);
+    const DWORD waitResult = WaitForSingleObject(process.hProcess, INFINITE);
+    if (waitResult != WAIT_OBJECT_0) {
+        const DWORD error = waitResult == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE;
+        CloseHandle(process.hProcess);
+        return static_cast<int>(error);
+    }
+
     DWORD exitCode = 0;
-    GetExitCodeProcess(process.hProcess, &exitCode);
+    if (!GetExitCodeProcess(process.hProcess, &exitCode)) {
+        const DWORD error = GetLastError();
+        CloseHandle(process.hProcess);
+        return static_cast<int>(error);
+    }
     CloseHandle(process.hProcess);
     return static_cast<int>(exitCode);
 }

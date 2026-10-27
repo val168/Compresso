@@ -13,6 +13,10 @@ Makefile
 .vs/
 .idea/
 .vscode/
+!.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
 *.user
 *.suo
 

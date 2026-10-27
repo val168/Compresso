@@ -1,0 +1,18 @@
+{
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/out/build/debug/compile_commands.json",
+  "C_Cpp.default.compilerPath": "C:/msys64/ucrt64/bin/g++.exe",
+  "C_Cpp.default.cppStandard": "c++23",
+  "C_Cpp.default.intelliSenseMode": "windows-gcc-x64",
+  "cmake.debugConfig": {
+    "environment": [
+      {
+        "name": "PATH",
+        "value": "C:/msys64/ucrt64/bin;${env:PATH}"
+      },
+      {
+        "name": "QT_PLUGIN_PATH",
+        "value": "C:/msys64/ucrt64/share/qt6/plugins"
+      }
+    ]
+  }
+}

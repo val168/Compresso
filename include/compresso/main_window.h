@@ -25,8 +25,6 @@ class QTableView;
 class QStandardItemModel;
 class QSortFilterProxyModel;
 class QComboBox;
-class QLineEdit;
-class QLabel;
 class QStackedWidget;
 class QNetworkAccessManager;
 class QUrl;

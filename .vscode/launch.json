@@ -1,0 +1,53 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Compresso (Debug)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/out/build/debug/CompressoApp.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/out/build/debug",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "C:/msys64/ucrt64/bin;${env:PATH}"
+        },
+        {
+          "name": "QT_PLUGIN_PATH",
+          "value": "C:/msys64/ucrt64/share/qt6/plugins"
+        }
+      ],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "C:/msys64/ucrt64/bin/gdb.exe"
+    },
+    {
+      "name": "Compresso UI tests (Debug)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/out/build/debug/CompressoUiTests.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/out/build/debug",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "C:/msys64/ucrt64/bin;${env:PATH}"
+        },
+        {
+          "name": "QT_PLUGIN_PATH",
+          "value": "C:/msys64/ucrt64/share/qt6/plugins"
+        },
+        {
+          "name": "QT_QPA_PLATFORM",
+          "value": "offscreen"
+        }
+      ],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "C:/msys64/ucrt64/bin/gdb.exe"
+    }
+  ]
+}

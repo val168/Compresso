@@ -38,7 +38,6 @@
 #include <QItemSelectionModel>
 #include <QStackedWidget>
 #include <QMenu>
-#include <QAction>
 #include <QToolButton>
 #include <QFileInfo>
 #include <QFile>
@@ -156,13 +155,43 @@ MainWindow::MainWindow(QWidget* parent)
 {
     themeManager_ = new compresso::ThemeManager(
         *qobject_cast<QApplication*>(QApplication::instance()), this);
-    setPalette(qApp->palette());
-    connect(themeManager_, &compresso::ThemeManager::paletteApplied,
-            this, [this](const QPalette& palette) {
-                setPalette(palette);
-                if (directoryPath_) directoryPath_->setPalette(palette);
-                if (progressBar_) progressBar_->setPalette(palette);
-            });
+    const auto applyPalette = [this](const QPalette& palette) {
+        const auto color = [&palette](QPalette::ColorRole role) {
+            return palette.color(role).name(QColor::HexRgb);
+        };
+        const QString window = color(QPalette::Window);
+        const QString windowText = color(QPalette::WindowText);
+        const QString base = color(QPalette::Base);
+        const QString alternateBase = color(QPalette::AlternateBase);
+        const QString button = color(QPalette::Button);
+        const QString buttonText = color(QPalette::ButtonText);
+        const QString mid = color(QPalette::Mid);
+        const QString midlight = color(QPalette::Midlight);
+        const QString highlight = color(QPalette::Highlight);
+        const QString highlightedText = color(QPalette::HighlightedText);
+        setPalette(palette);
+        if (directoryPath_) directoryPath_->setPalette(palette);
+        if (progressBar_) progressBar_->setPalette(palette);
+        setStyleSheet(QStringLiteral(
+            "QMainWindow,#libraryShell{background:%1;color:%2;}"
+            "#sidebar,#gameDetails{background:%1;border-right:1px solid %3;}"
+            "#brand{font-size:18px;font-weight:650;padding:8px 4px;}"
+            "QPushButton{background:%4;color:%5;border:1px solid %3;border-radius:5px;padding:7px 12px;}"
+            "QPushButton:hover{background:%6;} QPushButton:checked{background:%7;border-color:%7;}"
+            "QLineEdit,QComboBox{background:%8;border:1px solid %3;border-radius:5px;padding:7px;color:%2;}"
+            "QFrame#statBox{background:%8;border:1px solid %3;border-radius:7px;}"
+            "QLabel#gamesStat,QLabel#totalSizeStat,QLabel#onDiskStat,QLabel#savedStat{font-size:16px;font-weight:600;}"
+            "QLabel#statCaption{color:%3;font-size:11px;}"
+            "QLabel#selectedGameName{font-size:20px;font-weight:650;}"
+            "QTableView{background:%8;alternate-background-color:%9;border:1px solid %3;"
+            "selection-background-color:%7;selection-color:%10;outline:0;}"
+            "QHeaderView::section{background:%1;color:%2;border:0;padding:7px 6px;}"
+            "QStatusBar{background:%1;color:%2;}")
+            .arg(window, windowText, mid, button, buttonText, midlight, highlight, base,
+                 alternateBase, highlightedText));
+    };
+    connect(themeManager_, &compresso::ThemeManager::paletteApplied, this, applyPalette);
+    applyPalette(qApp->palette());
     qRegisterMetaType<compresso::ScanResult>("compresso::ScanResult");
     qRegisterMetaType<compresso::CompressionReport>("compresso::CompressionReport");
     qRegisterMetaType<compresso::CompressionProgress>("compresso::CompressionProgress");
@@ -633,22 +662,6 @@ MainWindow::MainWindow(QWidget* parent)
     setCentralWidget(shell);
     setMinimumSize(420, 300);
     resize(1480, 900);
-    setStyleSheet(QStringLiteral(
-        "QMainWindow,#libraryShell{background:#101417;color:#edf2f6;}"
-        "#sidebar,#gameDetails{background:#12181c;border-right:1px solid #242d33;}"
-        "#brand{font-size:18px;font-weight:650;padding:8px 4px;}"
-        "QPushButton{background:#20282e;border:1px solid #303b43;border-radius:5px;padding:7px 12px;}"
-        "QPushButton:hover{background:#29343b;} QPushButton:checked{background:#123354;border-color:#1479df;}"
-        "QLineEdit,QComboBox{background:#171e23;border:1px solid #303a41;border-radius:5px;padding:7px;color:#edf2f6;}"
-        "QFrame#statBox{background:#171e23;border:1px solid #222c32;border-radius:7px;}"
-        "QLabel#gamesStat,QLabel#totalSizeStat,QLabel#onDiskStat,QLabel#savedStat{font-size:16px;font-weight:600;}"
-        "QLabel#statCaption{color:#aab4bb;font-size:11px;}"
-        "QLabel#selectedGameName{font-size:20px;font-weight:650;}"
-        "QTableView{background:#101518;alternate-background-color:#141b1f;border:1px solid #202a30;"
-        "selection-background-color:#123c62;selection-color:#fff;outline:0;}"
-        "QHeaderView::section{background:#12191d;color:#c5cdd2;border:0;padding:7px 6px;}"
-        "QStatusBar{background:#12181c;color:#aeb9c0;}"));
-
     const QString savedDirectory = settings.value(QStringLiteral("directory/lastSelected"))
                                        .toString();
     if (!savedDirectory.isEmpty()) {
@@ -735,8 +748,9 @@ void MainWindow::startOperation(compresso::OperationWorker::Kind kind, const QSt
                     displayCompressionProgress(progress);
                     if (activeQueueTask_ >= 0 && progress.totals_known
                         && progress.total_files > 0) {
-                        const int percent = static_cast<int>(
-                            (100.0 * progress.completed_files) / progress.total_files);
+                        const int percent = static_cast<int>(100.0L
+                            * static_cast<long double>(progress.completed_files)
+                            / static_cast<long double>(progress.total_files));
                         updateQueueTask(activeQueueTask_, QStringLiteral("%1%").arg(percent),
                             activeOperationIsRestore_ ? QStringLiteral("Restoring")
                                                       : QStringLiteral("Compressing"));
@@ -1310,10 +1324,10 @@ void MainWindow::requestArtwork(const QString& appId, int variant)
         });
         connect(reply, &QNetworkReply::finished, this,
                 [this, reply, appId, cachePath] {
-            const QByteArray data = reply->readAll();
+            const QByteArray responseBody = reply->readAll();
             QUrl artworkUrl;
             if (reply->error() == QNetworkReply::NoError) {
-                const QJsonObject app = QJsonDocument::fromJson(data).object()
+                const QJsonObject app = QJsonDocument::fromJson(responseBody).object()
                                             .value(appId).toObject();
                 artworkUrl = QUrl(app.value(QStringLiteral("data")).toObject()
                                       .value(QStringLiteral("header_image")).toString());
@@ -1351,13 +1365,13 @@ void MainWindow::downloadArtwork(const QString& appId, const QUrl& url,
     });
     connect(reply, &QNetworkReply::finished, this,
             [this, reply, appId, cachePath, variant] {
-        const QByteArray data = reply->readAll();
+        const QByteArray responseBody = reply->readAll();
         QImage image;
-        if (reply->error() == QNetworkReply::NoError && image.loadFromData(data)
+        if (reply->error() == QNetworkReply::NoError && image.loadFromData(responseBody)
             && image.width() >= 100 && image.height() >= 60) {
             QFile file(cachePath);
             if (file.open(QIODevice::WriteOnly)) {
-                file.write(data);
+                file.write(responseBody);
                 file.close();
             }
             const QPixmap pixmap = QPixmap::fromImage(image);
