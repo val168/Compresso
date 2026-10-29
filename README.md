@@ -4,7 +4,7 @@ Compresso is a Windows desktop utility for analyzing game folders and applying W
 
 ## Download
 
-Download the [Compresso 1.0.1 portable release](https://github.com/val168/Compresso/releases/download/v1.0.1/Compresso-1.0.1-windows-x64.zip), or visit the [release page](https://github.com/val168/Compresso/releases/tag/v1.0.1) for release notes. Extract the ZIP and run `Compresso.exe`. The package includes the coffee cup app icon, Qt, and MinGW runtime libraries; it does not need a separate Qt or MSYS2 installation. No installer is required.
+Download the [Compresso 1.0.2 portable release](https://github.com/val168/Compresso/releases/download/v1.0.2/Compresso-1.0.2-windows-x64.zip), or visit the [release page](https://github.com/val168/Compresso/releases/tag/v1.0.2) for release notes. Extract the ZIP and run `Compresso.exe`. The package includes the coffee cup app icon, Qt, and MinGW runtime libraries; it does not need a separate Qt or MSYS2 installation. No installer is required.
 
 ## Screenshots
 
@@ -15,6 +15,7 @@ This screenshot shows the Compresso 1.0.1 interface with a detected game selecte
 ## Features
 
 - Automatically analyze detected game folders in the background, reporting file count, logical and allocated size, filesystem, and LZX eligibility. Repeated library refreshes analyze only newly detected folders.
+- Show aggregate logical size, allocated disk usage, and saved space across detected games as their scans complete.
 - Compress eligible files one at a time with Windows `compact.exe /C /EXE:LZX /Q`.
 - Restore supported LZX-compressed files with Windows `compact.exe /U /EXE:LZX /Q`, after confirmation.
 - Run scans and file operations in a background worker. See completed-file progress, current filename when available, elapsed time, and status. Cancel stops new files from being scheduled; completed changes remain in place.
@@ -78,7 +79,7 @@ ctest --test-dir out/build/release --output-on-failure
 cmake --build --preset release --target package-portable
 ```
 
-The build copies the Qt and MinGW runtime DLLs needed by `CompressoApp.exe` beside it. Run that executable from the build directory for development. The `package-portable` target installs the app, runtime files, and Qt plugins into `out/build/release/portable/Compresso/`, then creates `Compresso-1.0.1-windows-x64.zip` in the `portable/` directory. In the portable package, run the top-level `Compresso.exe`; it launches the Qt app from the `dependencies/` folder. This is the recommended way to run Compresso on a PC without the development toolchain.
+The build copies the Qt and MinGW runtime DLLs needed by `CompressoApp.exe` beside it. Run that executable from the build directory for development. The `package-portable` target installs the app, runtime files, and Qt plugins into `out/build/release/portable/Compresso/`, then creates `Compresso-1.0.2-windows-x64.zip` in the `portable/` directory. In the portable package, run the top-level `Compresso.exe`; it launches the Qt app from the `dependencies/` folder. This is the recommended way to run Compresso on a PC without the development toolchain.
 
 GitHub Actions builds and tests Debug and Release on Windows. Its Release job also packages the portable ZIP, launches the extracted application with Qt and MSYS2 removed from `PATH`, and uploads the ZIP as a workflow artifact.
 

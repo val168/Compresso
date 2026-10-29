@@ -949,6 +949,54 @@ void MainWindow::updateSelectedGameActions()
     }
 }
 
+void MainWindow::updateLibraryStats()
+{
+    std::size_t availableGames = 0;
+    std::size_t fullyScannedGames = 0;
+    std::size_t allocationMeasuredGames = 0;
+    std::uintmax_t totalLogicalBytes = 0;
+    std::uintmax_t measuredLogicalBytes = 0;
+    std::uintmax_t totalAllocatedBytes = 0;
+
+    for (int row = 0; row < gameModel_->rowCount(); ++row) {
+        const auto* gameItem = gameModel_->item(row, 0);
+        if (!gameItem || gameModel_->item(row, 6)->text() == QStringLiteral("Unavailable"))
+            continue;
+        ++availableGames;
+        if (!gameItem->data(Qt::UserRole + 9).toBool()) continue;
+
+        ++fullyScannedGames;
+        totalLogicalBytes += gameItem->data(Qt::UserRole + 4).toULongLong();
+        if (!gameItem->data(Qt::UserRole + 6).toBool()) continue;
+
+        ++allocationMeasuredGames;
+        measuredLogicalBytes += gameItem->data(Qt::UserRole + 4).toULongLong();
+        totalAllocatedBytes += gameItem->data(Qt::UserRole + 5).toULongLong();
+    }
+
+    gamesStat_->setText(QString::number(gameModel_->rowCount()));
+    const auto totalText = [](std::uintmax_t bytes, std::size_t included,
+                              std::size_t available) {
+        if (included == 0) return QStringLiteral("—");
+        const QString value = compactBytes(bytes);
+        return included < available ? QStringLiteral("~%1").arg(value) : value;
+    };
+    totalSizeStat_->setText(totalText(totalLogicalBytes, fullyScannedGames, availableGames));
+    onDiskStat_->setText(totalText(totalAllocatedBytes, allocationMeasuredGames, availableGames));
+    const std::uintmax_t savedBytes = measuredLogicalBytes > totalAllocatedBytes
+        ? measuredLogicalBytes - totalAllocatedBytes : 0;
+    savedStat_->setText(totalText(savedBytes, allocationMeasuredGames, availableGames));
+
+    totalSizeStat_->setToolTip(QStringLiteral(
+        "Logical size summed across %1 of %2 available game installations. ~ means some scans are still pending or incomplete.")
+        .arg(fullyScannedGames).arg(availableGames));
+    const QString allocationCoverage = QStringLiteral(
+        "Allocated size summed across %1 of %2 available game installations. ~ means some scans are still pending or incomplete.")
+        .arg(allocationMeasuredGames).arg(availableGames);
+    onDiskStat_->setToolTip(allocationCoverage);
+    savedStat_->setToolTip(allocationCoverage);
+}
+
 void MainWindow::displayScanResult(const compresso::ScanResult& result,
                                    const QString& directory)
 {
@@ -1076,6 +1124,7 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     gameItem->setData(static_cast<qulonglong>(result.total_allocated_bytes), Qt::UserRole + 5);
     gameItem->setData(result.allocation_measurements_complete, Qt::UserRole + 6);
     gameItem->setData(static_cast<qulonglong>(result.total_file_count), Qt::UserRole + 7);
+    gameItem->setData(result.traversal_complete, Qt::UserRole + 9);
     gameItem->setData(result.volume.filesystem_type.empty()
         ? QStringLiteral("Unavailable")
         : QString::fromStdWString(result.volume.filesystem_type)
@@ -1095,7 +1144,7 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
     gameModel_->item(modelRow, 6)->setToolTip(statusDetails);
     gameModel_->item(modelRow, 7)->setText(
         QStringList{gameName, launcher, drive, status, directory}.join(QLatin1Char(' ')));
-    gamesStat_->setText(QString::number(gameModel_->rowCount()));
+    updateLibraryStats();
     const QModelIndex gameIndex = gameProxy_->mapFromSource(gameModel_->index(modelRow, 0));
     QString message = result.traversal_complete ? QStringLiteral("Scan complete: ")
                                                 : QStringLiteral("Scan incomplete: ");
@@ -1123,9 +1172,6 @@ void MainWindow::displayScanResult(const compresso::ScanResult& result,
             : "Unavailable");
         fileCountValue_->setText(
             locale.toString(static_cast<qulonglong>(result.total_file_count)));
-        totalSizeStat_->setText(gameModel_->rowCount() == 1 ? sizeText : QStringLiteral("—"));
-        onDiskStat_->setText(gameModel_->rowCount() == 1 ? diskText : QStringLiteral("—"));
-        savedStat_->setText(gameModel_->rowCount() == 1 ? savedText : QStringLiteral("—"));
         selectedGameName_->setText(gameName);
         if (gameIndex.isValid()) gameTable_->selectRow(gameIndex.row());
 
@@ -1188,6 +1234,7 @@ void MainWindow::displayDiscoveredGames(const QList<compresso::GameInstallation>
             rowIndex = gameModel_->rowCount();
             gameModel_->appendRow(row);
             gameModel_->item(rowIndex, 0)->setData(false, Qt::UserRole + 3);
+            gameModel_->item(rowIndex, 0)->setData(false, Qt::UserRole + 9);
         }
         auto* gameItem = gameModel_->item(rowIndex, 0);
         gameItem->setText(game.name);
@@ -1210,12 +1257,14 @@ void MainWindow::displayDiscoveredGames(const QList<compresso::GameInstallation>
                 return directoryKey(task.path) == key;
             });
             gameItem->setData(false, Qt::UserRole + 3);
+            gameItem->setData(false, Qt::UserRole + 9);
             gameModel_->item(rowIndex, 6)->setText(QStringLiteral("Unavailable"));
             gameModel_->item(rowIndex, 6)->setToolTip(
                 QStringLiteral("The manifest exists, but the installation directory is missing."));
         } else if (analyzedGamePaths_.contains(key)) {
             // Keep the completed analysis values when refreshing the library.
         } else {
+            gameItem->setData(false, Qt::UserRole + 9);
             gameModel_->item(rowIndex, 6)->setText(QStringLiteral("Pending analysis"));
             gameModel_->item(rowIndex, 6)->setToolTip(
                 QStringLiteral("Analysis starts automatically for newly detected games."));
@@ -1253,16 +1302,13 @@ void MainWindow::displayDiscoveredGames(const QList<compresso::GameInstallation>
     for (const QString& drive : std::as_const(drives)) {
         if (drive != QStringLiteral("—")) driveFilter_->addItem(drive);
     }
-    gamesStat_->setText(QString::number(gameModel_->rowCount()));
     if (!gameTable_->currentIndex().isValid()) {
-        totalSizeStat_->setText(QStringLiteral("—"));
-        onDiskStat_->setText(QStringLiteral("—"));
-        savedStat_->setText(QStringLiteral("—"));
         selectedGameName_->setText(games.isEmpty()
             ? QStringLiteral("No Steam games found") : QStringLiteral("Select a game"));
         showGameArtwork({});
         updateSelectedGameActions();
     }
+    updateLibraryStats();
     const bool allAvailableGamesScanned = !games.isEmpty()
         && std::all_of(games.cbegin(), games.cend(), [this](const auto& game) {
             return !game.available || analyzedGamePaths_.contains(directoryKey(game.install_path));

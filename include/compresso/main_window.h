@@ -45,6 +45,7 @@ private:
     void startNextAutomaticAnalysis();
     void setGameAnalysisState(const QString& directory, const QString& status);
     void updateSelectedGameActions();
+    void updateLibraryStats();
     void displayScanResult(const compresso::ScanResult& result, const QString& directory);
     void startCompression();
     void startRestore();

@@ -152,6 +152,7 @@ jobs:
               `Compresso ${version} is a Windows utility for analyzing game folders and applying transparent NTFS LZX compression in place.`,
               '',
               '- Analyze logical and allocated sizes, file counts, filesystem type, and LZX eligibility.',
+              '- Show library-wide size, allocated usage, and saved-space totals as game scans complete.',
               '- Compress and restore files through Windows `compact.exe /C /EXE:LZX` and `/U /EXE:LZX`; file paths and direct game access are preserved.',
               '- Run scans and file operations asynchronously with progress, cancellation, per-file results, and diagnostic details.',
               '- Includes a fixed-size dark interface with a custom cup icon and a portable Windows distribution.',
