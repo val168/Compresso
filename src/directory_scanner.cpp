@@ -41,16 +41,8 @@ bool readMetadata(const std::filesystem::path& path, EntryMetadata& metadata,
     metadata.attributes.compressed = (nativeAttributes & FILE_ATTRIBUTE_COMPRESSED) != 0;
     metadata.attributes.encrypted = (nativeAttributes & FILE_ATTRIBUTE_ENCRYPTED) != 0;
     metadata.attributes.sparse = (nativeAttributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
-
-    if (!metadata.is_directory && !metadata.is_reparse_point) {
-        std::error_code statusError;
-        const auto status = std::filesystem::symlink_status(path, statusError);
-        if (statusError) {
-            error = statusError;
-            return false;
-        }
-        metadata.is_regular_file = std::filesystem::is_regular_file(status);
-    }
+    metadata.is_regular_file = !metadata.is_directory && !metadata.is_reparse_point
+        && (nativeAttributes & FILE_ATTRIBUTE_DEVICE) == 0;
 #else
     const auto status = std::filesystem::symlink_status(path, error);
     if (error) {

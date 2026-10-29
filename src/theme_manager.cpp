@@ -11,13 +11,6 @@ namespace compresso
 namespace
 {
 
-ThemePreference parsePreference(const QString& value)
-{
-    if (value == QStringLiteral("light")) return ThemePreference::light;
-    if (value == QStringLiteral("dark")) return ThemePreference::dark;
-    return ThemePreference::system;
-}
-
 QString preferenceName(ThemePreference preference)
 {
     switch (preference) {
@@ -31,11 +24,9 @@ QString preferenceName(ThemePreference preference)
 } // namespace
 
 ThemeManager::ThemeManager(QApplication& application, QObject* parent)
-    : QObject(parent), application_(application), nativePalette_(application.palette())
+    : QObject(parent), application_(application), nativePalette_(application.palette()),
+      preference_(ThemePreference::dark)
 {
-    QSettings settings;
-    preference_ = parsePreference(settings.value(QStringLiteral("appearance/theme"),
-                                                 QStringLiteral("dark")).toString());
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(application_.styleHints(), &QStyleHints::colorSchemeChanged,
             this, [this](Qt::ColorScheme) {
@@ -102,6 +93,7 @@ QPalette ThemeManager::lightPalette()
     palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(125, 125, 125));
     palette.setColor(QPalette::Disabled, QPalette::Text, QColor(125, 125, 125));
     palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(125, 125, 125));
+    palette.setColor(QPalette::Disabled, QPalette::Button, QColor(225, 225, 225));
     return palette;
 }
 
@@ -128,6 +120,7 @@ QPalette ThemeManager::darkPalette()
     palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(145, 145, 145));
     palette.setColor(QPalette::Disabled, QPalette::Text, QColor(145, 145, 145));
     palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(145, 145, 145));
+    palette.setColor(QPalette::Disabled, QPalette::Button, QColor(38, 38, 38));
     return palette;
 }
 

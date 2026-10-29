@@ -9,11 +9,7 @@
 #include <QSet>
 
 #include <algorithm>
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#endif
+#include <utility>
 
 namespace
 {
@@ -42,40 +38,48 @@ QString canonicalPath(const QString& path)
 
 QStringList steamRoots()
 {
-    QStringList roots;
-    QSettings registry(QStringLiteral("HKEY_CURRENT_USER\\Software\\Valve\\Steam"),
-                       QSettings::NativeFormat);
-    const QString registered = registry.value(QStringLiteral("SteamPath")).toString();
-    if (!registered.isEmpty()) roots.push_back(QDir::fromNativeSeparators(registered));
+    // Steam's libraryfolders.vdf lists game libraries on other drives. Find the
+    // client through its registry entries and standard install locations instead
+    // of probing every mounted drive (which can stall on sleeping removable disks).
+    static const QStringList roots = [] {
+        QStringList candidates;
+        const auto addCandidate = [&candidates](QString path) {
+            path = QDir::fromNativeSeparators(path.trimmed());
+            if (!path.isEmpty()) candidates.push_back(std::move(path));
+        };
+
+        QSettings currentUser(QStringLiteral("HKEY_CURRENT_USER\\Software\\Valve\\Steam"),
+                              QSettings::NativeFormat);
+        addCandidate(currentUser.value(QStringLiteral("SteamPath")).toString());
 
 #ifdef _WIN32
-    const DWORD mask = GetLogicalDrives();
-    for (int drive = 0; drive < 26; ++drive) {
-        if ((mask & (1u << drive)) == 0) continue;
-        wchar_t root[] = {static_cast<wchar_t>(L'A' + drive), L':', L'\\', L'\0'};
-        const UINT type = GetDriveTypeW(root);
-        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) continue;
-        const QString volume = QString::fromWCharArray(root);
-        for (const QString& relative : {
-                 QStringLiteral("Program Files (x86)/Steam"),
-                 QStringLiteral("Program Files/Steam"), QStringLiteral("Steam"),
-                 QStringLiteral("Games/Steam")}) {
-            roots.push_back(QDir(volume).filePath(relative));
+        for (const QString& key : {
+                 QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Valve\\Steam"),
+                 QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Valve\\Steam")}) {
+            QSettings machine(key, QSettings::NativeFormat);
+            addCandidate(machine.value(QStringLiteral("InstallPath")).toString());
+            addCandidate(machine.value(QStringLiteral("SteamPath")).toString());
         }
-    }
 #endif
 
-    QStringList existing;
-    QSet<QString> seen;
-    for (const QString& root : roots) {
-        const QString normalized = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
-        const QString key = normalized.toCaseFolded();
-        if (QDir(normalized).exists() && !seen.contains(key)) {
+        for (const QString& parent : {qEnvironmentVariable("ProgramFiles(x86)"),
+                                      qEnvironmentVariable("ProgramFiles"),
+                                      qEnvironmentVariable("LOCALAPPDATA")}) {
+            if (!parent.isEmpty()) addCandidate(QDir(parent).filePath(QStringLiteral("Steam")));
+        }
+
+        QStringList existing;
+        QSet<QString> seen;
+        for (const QString& candidate : std::as_const(candidates)) {
+            const QString normalized = QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+            const QString key = normalized.toCaseFolded();
+            if (seen.contains(key) || !QDir(normalized).exists()) continue;
             seen.insert(key);
             existing.push_back(normalized);
         }
-    }
-    return existing;
+        return existing;
+    }();
+    return roots;
 }
 
 } // namespace
@@ -142,12 +146,21 @@ QStringList compresso::SteamDiscovery::parseLibraryFolders(const QString& vdfTex
 QList<compresso::GameInstallation> compresso::SteamDiscovery::discover()
 {
     QStringList libraries;
+    QSet<QString> seenLibraries;
+    const auto addLibrary = [&libraries, &seenLibraries](const QString& path) {
+        const QString normalized = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+        const QString key = normalized.toCaseFolded();
+        if (!seenLibraries.contains(key)) {
+            seenLibraries.insert(key);
+            libraries.push_back(normalized);
+        }
+    };
     for (const QString& root : steamRoots()) {
-        libraries.push_back(root);
+        addLibrary(root);
         QFile manifest(QDir(root).filePath(QStringLiteral("steamapps/libraryfolders.vdf")));
         if (!manifest.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
         const QString text = QString::fromUtf8(manifest.readAll());
-        libraries.append(parseLibraryFolders(text));
+        for (const QString& library : parseLibraryFolders(text)) addLibrary(library);
     }
 
     QList<GameInstallation> result;

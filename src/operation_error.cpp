@@ -28,7 +28,7 @@ std::string compresso::operationErrorMessage(OperationErrorCode code)
     case OperationErrorCode::file_changed:
         return "A file changed during the operation. Close applications using it and retry.";
     case OperationErrorCode::verification_failed:
-        return "The final compression state could not be verified. Analyze the folder again.";
+        return "The final compression state could not be verified. A follow-up scan is needed.";
     case OperationErrorCode::unexpected_failure:
         return "The operation could not be completed. See Details for diagnostics.";
     }

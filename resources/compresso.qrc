@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/resources">
+        <file alias="compresso-cup.png">compresso-cup.png</file>
+    </qresource>
+</RCC>

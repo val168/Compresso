@@ -12,13 +12,12 @@ These screenshots show the real Compresso main window in its light and dark them
 
 ## Features
 
-- Select an existing game directory with the Windows folder picker or enter its path.
-- Analyze file count, total logical size, current allocated disk size, filesystem type, and LZX eligibility.
+- Automatically analyze detected game folders in the background, reporting file count, logical and allocated size, filesystem, and LZX eligibility. Repeated library refreshes analyze only newly detected folders.
 - Compress eligible files one at a time with Windows `compact.exe /C /EXE:LZX /Q`.
 - Restore supported LZX-compressed files with Windows `compact.exe /U /EXE:LZX /Q`, after confirmation.
 - Run scans and file operations in a background worker. See completed-file progress, current filename when available, elapsed time, and status. Cancel stops new files from being scheduled; completed changes remain in place.
 - Compare measured allocated usage before and after compression. The result can show no savings or increased allocation; it is not an estimate based on file types.
-- Choose System, Light, or Dark appearance. Compresso remembers the theme, last validated directory, and window geometry. It never resumes a compression or restore operation on launch.
+- Choose System, Light, or Dark appearance. Compresso remembers the theme and window geometry. It never resumes a compression or restore operation on launch.
 - Review operation diagnostics, including skipped and failed files, through **Details** when diagnostic entries are available.
 
 ## How LZX compression works
@@ -40,7 +39,7 @@ Compresso invokes the Windows utility with safely separated process arguments. I
 ### To analyze or change game-file compression
 
 - The selected game folder must be on a local, fixed NTFS volume that reports support for file compression.
-- FAT, exFAT, ReFS, network paths, removable volumes, and other volumes that do not meet that check are not eligible for LZX operations. Analyze still reports the filesystem and eligibility result.
+- FAT, exFAT, ReFS, network paths, removable volumes, and other volumes that do not meet that check are not eligible for LZX operations. Automatic analysis still reports the filesystem and eligibility result.
 - Windows' `compact.exe` and WOF services must be available.
 
 ### To build from source
@@ -83,8 +82,8 @@ GitHub Actions builds and tests Debug and Release on Windows. Its Release job al
 
 ## Use Compresso
 
-1. Start Compresso and choose the game installation folder with **Browse…**, or type an existing path and press Enter. Selecting a directory does not start a scan or compression.
-2. Select **Analyze**. The window reports logical file size separately from currently allocated disk size, along with file count, filesystem, and whether the volume is eligible for LZX. Scanning does not modify game files.
+1. Start Compresso. Detected game folders are analyzed automatically in the background; newly detected folders are analyzed after a library refresh. Select a detected game in the library to view its analysis.
+2. The library reports logical size, allocated disk size, file count, filesystem, and LZX eligibility as each analysis completes. Analysis does not modify game files.
 3. If the selected directory is eligible, choose **Compress** to start the in-place operation. Check the status summary for compressed, skipped, and failed counts and actual allocated-space change. Use **Cancel** to stop scheduling additional files; changes already completed are not rolled back.
 4. Use **Details** when shown to inspect paths and diagnostics for skipped or failed items.
 
@@ -92,7 +91,7 @@ GitHub Actions builds and tests Debug and Release on Windows. Its Release job al
 
 Restore reverses Compresso's transparent LZX file-compression state. It does not extract an archive or make replacement copies.
 
-1. Select and analyze the same game installation folder. Confirm that the path is the intended installation before proceeding.
+1. Select a game installation and wait for its automatic analysis to complete. Confirm that the path is the intended installation before proceeding.
 2. Choose **Restore** and read the confirmation. Choose **Yes** only if you want Compresso to remove supported LZX compression from files under that selected folder.
 3. Let the operation finish, then review its restored, skipped, and failed counts. **Details** contains per-file information when issues were reported. If cancelled, already restored files stay restored and the active file's final state may be unverified.
 4. Check that the game and its launcher work as expected. Restoration can be run again for remaining supported LZX files.

@@ -1,6 +1,6 @@
 # Asynchronous operations
 
-The main window runs each directory scan, compression, or restoration request on a dedicated `QThread` with one `OperationWorker`. Only one operation can run at a time. The path field, Browse, Analyze, Compress, and Restore controls are disabled while the worker is active. A Cancel button is shown for the duration of the operation.
+The main window runs each directory scan, compression, or restoration request on a dedicated `QThread` with one `OperationWorker`. Only one operation can run at a time. Newly detected game folders are analyzed in the background; completed paths are retained across library refreshes, so later refreshes analyze only newly detected games. Compress and Restore controls are disabled while a worker is active. A Cancel button is shown for the duration of the operation.
 
 The worker owns the scanner call or the compression backend call. The backend creates and waits for each `QProcess` on that worker thread, so process startup and file operations do not block the GUI. Progress, errors, and completed results cross to the window through Qt signals and queued connections; the GUI updates its widgets only on the GUI thread. Restore asks for explicit confirmation before starting.
 
