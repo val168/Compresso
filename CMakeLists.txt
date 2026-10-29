@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(Compresso VERSION 1.0.0 LANGUAGES CXX)
+project(Compresso VERSION 1.0.1 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "Compresso is a Windows-only application.")
@@ -18,6 +18,11 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Network Widgets)
 
+file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/resources/compresso.ico"
+     COMPRESSO_APP_ICON_PATH)
+configure_file(resources/compresso.rc.in
+               "${CMAKE_CURRENT_BINARY_DIR}/compresso.rc" @ONLY)
+
 add_executable(Compresso WIN32
     src/main.cpp
     src/operation_error.cpp
@@ -31,6 +36,7 @@ add_executable(Compresso WIN32
     src/theme_manager.cpp
     src/main_window.cpp
     resources/compresso.qrc
+    "${CMAKE_CURRENT_BINARY_DIR}/compresso.rc"
     include/compresso/directory_validator.h
     include/compresso/operation_error.h
     include/compresso/compression_summary.h
@@ -78,7 +84,10 @@ add_custom_command(TARGET Compresso POST_BUILD
 # Keep the user-facing executable free of Qt imports. Windows resolves an
 # executable's imported DLLs before its entry point, so a small launcher starts
 # the Qt application from the adjacent dependencies directory.
-add_executable(CompressoLauncher WIN32 src/launcher.cpp)
+add_executable(CompressoLauncher WIN32
+    src/launcher.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/compresso.rc"
+)
 target_compile_features(CompressoLauncher PRIVATE cxx_std_23)
 target_link_options(CompressoLauncher PRIVATE -municode -static -static-libgcc -static-libstdc++)
 set_target_properties(CompressoLauncher PROPERTIES OUTPUT_NAME Compresso)

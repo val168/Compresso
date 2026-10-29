@@ -154,7 +154,7 @@ jobs:
               '- Analyze logical and allocated sizes, file counts, filesystem type, and LZX eligibility.',
               '- Compress and restore files through Windows `compact.exe /C /EXE:LZX` and `/U /EXE:LZX`; file paths and direct game access are preserved.',
               '- Run scans and file operations asynchronously with progress, cancellation, per-file results, and diagnostic details.',
-              '- Includes system, light, and dark themes and a portable Windows distribution.',
+              '- Includes a fixed-size dark interface with a custom cup icon and a portable Windows distribution.',
               '',
               'Requires 64-bit Windows 10 or later. Compression requires a local fixed NTFS volume that supports file compression. File compatibility and space savings vary; review skipped and failed files and test the game after compression.'
             ].join('\n');

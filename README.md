@@ -4,11 +4,9 @@ Compresso is a Windows desktop utility for analyzing game folders and applying W
 
 ## Screenshots
 
-These screenshots show the real Compresso main window in its light and dark themes. The fields are empty because no sample game data is included.
+This screenshot shows the real Compresso main window. The fields are empty because no sample game data is included.
 
-| Light theme | Dark theme |
-|:--:|:--:|
-| ![Compresso main window in the light theme](docs/screenshots/compresso-light.png) | ![Compresso main window in the dark theme](docs/screenshots/compresso-dark.png) |
+![Compresso main window](docs/screenshots/compresso-dark.png)
 
 ## Features
 
@@ -17,7 +15,7 @@ These screenshots show the real Compresso main window in its light and dark them
 - Restore supported LZX-compressed files with Windows `compact.exe /U /EXE:LZX /Q`, after confirmation.
 - Run scans and file operations in a background worker. See completed-file progress, current filename when available, elapsed time, and status. Cancel stops new files from being scheduled; completed changes remain in place.
 - Compare measured allocated usage before and after compression. The result can show no savings or increased allocation; it is not an estimate based on file types.
-- Choose System, Light, or Dark appearance. Compresso remembers the theme and window geometry. It never resumes a compression or restore operation on launch.
+- Use the fixed-size dark interface with the branded title bar. Compresso remembers the window geometry and never resumes a compression or restore operation on launch.
 - Review operation diagnostics, including skipped and failed files, through **Details** when diagnostic entries are available.
 
 ## How LZX compression works
@@ -76,7 +74,7 @@ ctest --test-dir out/build/release --output-on-failure
 cmake --build --preset release --target package-portable
 ```
 
-The ordinary CMake build output is not self-contained: both Debug and Release executables need the Qt and MinGW runtime environment used to build them. The package target installs the Release executable, Qt deployment files, and required runtime DLLs to `out/build/release/portable/Compresso/`, then creates `Compresso-1.0.0-windows-x64.zip` in the `portable/` directory. For a standalone app, extract that ZIP and run `Compresso/bin/Compresso.exe`; do not launch `out/build/release/Compresso.exe` directly on a clean Windows installation. For development, run either unpackaged executable from the MSYS2 UCRT64 terminal so Qt and MinGW runtime DLLs are on `PATH`.
+The ordinary CMake build output is not self-contained: both Debug and Release executables need the Qt and MinGW runtime environment used to build them. The package target installs the Release executable, Qt deployment files, and required runtime DLLs to `out/build/release/portable/Compresso/`, then creates `Compresso-1.0.1-windows-x64.zip` in the `portable/` directory. For a standalone app, extract that ZIP and run `Compresso/bin/Compresso.exe`; do not launch `out/build/release/Compresso.exe` directly on a clean Windows installation. For development, run either unpackaged executable from the MSYS2 UCRT64 terminal so Qt and MinGW runtime DLLs are on `PATH`.
 
 GitHub Actions builds and tests Debug and Release on Windows. Its Release job also packages the portable ZIP, launches the extracted application with Qt and MSYS2 removed from `PATH`, and uploads the ZIP as a workflow artifact.
 
