@@ -8,7 +8,7 @@ Download the [Compresso 1.0.1 portable release](https://github.com/val168/Compre
 
 ## Screenshots
 
-This screenshot shows the real Compresso main window. The fields are empty because no sample game data is included.
+This screenshot shows the Compresso 1.0.1 interface with a detected game selected. The displayed library is from the capture machine; the portable download does not include or require any game data.
 
 ![Compresso main window](docs/screenshots/compresso-dark.png)
 
